@@ -1,0 +1,33 @@
+# AIST GitHub Actions Integration
+# Runs AIST scan on push and pull requests
+# Full implementation in v1.0
+
+name: AIST Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install AIST
+        run: pip install -e .
+      - name: Run AIST scan
+        run: |
+          aist scan \
+            --target ${{ secrets.AGENT_ENDPOINT }} \
+            --output scan-results.sarif \
+            --format sarif
+      - name: Upload SARIF results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: scan-results.sarif
