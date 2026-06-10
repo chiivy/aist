@@ -31,6 +31,9 @@ class ScanConfig:
     log_level: str = "INFO"
     reports_dir: str = "reports"
     logs_dir: str = "logs"
+    expose_evidence: bool = False
+    executive_mode: bool = False
+    categories: Optional[list] = None
 
 
 @dataclass
@@ -113,6 +116,9 @@ def load_config(
     log_level: str = None,
     output_dir: str = None,
     siem_endpoint: str = None,
+    expose_evidence: bool = False,
+    executive_mode: bool = False,
+    categories: list = None,
 ) -> AISTConfig:
     """
     Load configuration from environment variables
@@ -132,6 +138,9 @@ def load_config(
         log_level:       Logging verbosity
         output_dir:      Directory for reports
         siem_endpoint:   Optional SIEM endpoint URL
+        expose_evidence: Include unmasked values in report
+        executive_mode:  Generate executive report only
+        categories:      List of payload categories to run
 
     Returns:
         Populated AISTConfig object
@@ -161,6 +170,9 @@ def load_config(
         os.getenv("REPORTS_DIR", "reports")
     )
     config.scan.logs_dir = os.getenv("LOGS_DIR", "logs")
+    config.scan.expose_evidence = expose_evidence
+    config.scan.executive_mode = executive_mode
+    config.scan.categories = categories
 
     # Target config
     config.target.endpoint = (
@@ -266,9 +278,16 @@ def load_config(
         tools=config.target.tools,
         runs=config.scan.max_payload_runs,
         llm_enabled=config.llm.enabled,
-        llm_provider=config.llm.provider if config.llm.enabled else "none",
+        llm_provider=(
+            config.llm.provider
+            if config.llm.enabled
+            else "none"
+        ),
         canary_enabled=config.canary.enabled,
         siem_enabled=config.siem.enabled,
+        expose_evidence=config.scan.expose_evidence,
+        executive_mode=config.scan.executive_mode,
+        categories=config.scan.categories or "all",
     )
 
     return config

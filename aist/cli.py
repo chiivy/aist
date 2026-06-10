@@ -30,6 +30,32 @@ def print_banner():
     ))
 
 
+def confirm_expose_evidence() -> bool:
+    """
+    Prompt user to explicitly confirm they want
+    unmasked sensitive values in their report.
+
+    Returns:
+        True if user confirmed, False otherwise
+    """
+    from aist.evidence.masking import EXPOSE_CONFIRMATION_WARNING
+    console.print(
+        f"\n[bold red]{EXPOSE_CONFIRMATION_WARNING}[/bold red]"
+    )
+    confirmation = input().strip()
+    if confirmation == "CONFIRM":
+        console.print(
+            "[yellow]Proceeding with unmasked report. "
+            "Handle output with care.[/yellow]\n"
+        )
+        return True
+    console.print(
+        "[green]Cancelled. Standard masked report "
+        "will be generated.[/green]\n"
+    )
+    return False
+
+
 @click.group()
 def main():
     """
@@ -55,7 +81,7 @@ def main():
     "--tools", "-T",
     default="",
     help="Comma-separated list of agent tools "
-         "(e.g. email,files,database)"
+         "e.g. email,files,database"
 )
 @click.option(
     "--output", "-o",
@@ -87,7 +113,32 @@ def main():
     default=None,
     help="Optional SIEM endpoint URL for log shipping"
 )
-def scan(target, tools, output, mode, runs, log_level, siem):
+@click.option(
+    "--expose-evidence",
+    is_flag=True,
+    default=False,
+    help="Include unmasked sensitive values in report. "
+         "Requires confirmation. Handle output with care."
+)
+@click.option(
+    "--executive",
+    is_flag=True,
+    default=False,
+    help="Generate executive summary report only. "
+         "No technical details. Safe for non-technical stakeholders."
+)
+@click.option(
+    "--categories",
+    default="all",
+    help="Comma-separated payload categories to run. "
+         "e.g. A,B,G or 'all' for everything. "
+         "Default: all"
+)
+def scan(
+    target, tools, output, mode, runs,
+    log_level, siem, expose_evidence,
+    executive, categories
+):
     """
     Run a full injection security scan against a target agent.
 
@@ -96,22 +147,42 @@ def scan(target, tools, output, mode, runs, log_level, siem):
         aist scan --target https://agent.example.com
                   --tools email,files,database
                   --output report.html
+
+    With expose mode for remediation:
+
+        aist scan --target https://agent.example.com
+                  --expose-evidence
     """
     setup_logging(log_level=log_level)
     print_banner()
 
+    # Handle expose evidence confirmation
+    if expose_evidence:
+        expose_evidence = confirm_expose_evidence()
+
     tools_list = [t.strip() for t in tools.split(",") if t.strip()]
 
-    console.print(
-        f"\n[bold]Target:[/bold] {target}"
+    categories_list = (
+        None if categories == "all"
+        else [c.strip().upper() for c in categories.split(",")]
     )
+
+    console.print(f"\n[bold]Target:[/bold] {target}")
     console.print(
         f"[bold]Tools declared:[/bold] "
         f"{', '.join(tools_list) if tools_list else 'none'}"
     )
     console.print(f"[bold]Mode:[/bold] {mode}")
     console.print(f"[bold]Payload runs:[/bold] {runs}")
-    console.print(f"[bold]Output:[/bold] {output}\n")
+    console.print(
+        f"[bold]Categories:[/bold] "
+        f"{categories if categories == 'all' else categories_list}"
+    )
+    console.print(f"[bold]Output:[/bold] {output}")
+    console.print(
+        f"[bold]Expose evidence:[/bold] {expose_evidence}"
+    )
+    console.print(f"[bold]Executive mode:[/bold] {executive}\n")
 
     config = load_config(
         target_endpoint=target,
@@ -120,6 +191,9 @@ def scan(target, tools, output, mode, runs, log_level, siem):
         runs=runs,
         log_level=log_level,
         siem_endpoint=siem,
+        expose_evidence=expose_evidence,
+        executive_mode=executive,
+        categories=categories_list,
     )
 
     log.info(
@@ -128,9 +202,10 @@ def scan(target, tools, output, mode, runs, log_level, siem):
         tools=tools_list,
         mode=mode,
         runs=runs,
+        expose_evidence=expose_evidence,
+        executive=executive,
     )
 
-    # Scan orchestration -- implemented in v1.0
     console.print(
         "[yellow]Scan engine coming in v1.0[/yellow]"
     )
@@ -181,9 +256,7 @@ def discover(target, mode, output, log_level):
     setup_logging(log_level=log_level)
     print_banner()
 
-    console.print(
-        f"\n[bold]Target:[/bold] {target}"
-    )
+    console.print(f"\n[bold]Target:[/bold] {target}")
     console.print(f"[bold]Mode:[/bold] {mode}")
     console.print(f"[bold]Output:[/bold] {output}\n")
 
@@ -199,7 +272,6 @@ def discover(target, mode, output, log_level):
         mode=mode,
     )
 
-    # Discovery orchestration -- implemented in v1.0
     console.print(
         "[yellow]Discovery engine coming in v1.0[/yellow]"
     )

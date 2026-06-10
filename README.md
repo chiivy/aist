@@ -44,6 +44,8 @@ severity based on what the agent can actually do.
 | Streaming response support | Yes | No | No | No |
 | Environment and OS probing | Yes | No | No | No |
 | Adaptive testing via model fingerprinting | Yes | No | No | No |
+| LLM judge analysis for accurate detection | Yes | No | No | No |
+| Configurable evidence exposure modes | Yes | No | No | No |
 | Local execution, no data sent to third parties | Yes | Yes | No | Yes |
 | MITRE ATLAS mapped findings | Yes | No | No | No |
 | SIEM-ready structured logging | Yes | No | No | No |
@@ -56,8 +58,6 @@ with email, file, and database access. No existing open source tool
 accounts for this.
 
 ---
-
-## Quick Start
 
 ## Getting Started
 
@@ -97,9 +97,8 @@ aist scan --target https://your-agent.com \
 | Canary only | Canary trigger + string matching | Medium |
 | No config | String matching only | Basic |
 
-See [docs/canary_setup.md](docs/canary_setup.md) for
-free canary options including canarytokens.org.
-
+See [docs/canary_setup.md](docs/canary_setup.md) for free canary options
+including canarytokens.org.
 
 ---
 
@@ -134,7 +133,7 @@ free canary options including canarytokens.org.
 - SQL injection via database tools
 - Command injection via shell tools
 - Path traversal via file tools
-- SSRF via web browsing tools
+- SSRF via web browsing tools including AWS, Azure, and GCP metadata endpoints
 - Environment variable extraction
 
 **Output Manipulation**
@@ -156,6 +155,14 @@ Every scan produces:
 - JSON report for machine processing and pipeline integration
 - SARIF output for native display in GitHub and VS Code
 - SIEM-ready structured JSON audit log
+
+**Three report modes:**
+
+| Mode | Command | Use case |
+|------|---------|----------|
+| Standard | `aist scan --target ...` | Default. Partial masking of sensitive values |
+| Sensitive | `aist scan --target ... --expose-evidence` | Full values for remediation. Requires confirmation |
+| Executive | `aist scan --target ... --executive` | Traffic light only. Safe for non-technical stakeholders |
 
 ---
 
