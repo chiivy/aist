@@ -59,17 +59,47 @@ accounts for this.
 
 ## Quick Start
 
-```bash
-pip install aist
-```
+## Getting Started
+
+**Minimum setup -- runs a basic scan immediately:**
 
 ```bash
+pip install aist
+aist scan --target https://your-agent.com
+```
+
+**Full setup -- maximum detection accuracy:**
+
+```bash
+# Clone the repo
+git clone https://github.com/chiivy/aist
+cd aist
+
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your values
+# See docs/canary_setup.md for canary setup options
+
+# Install and scan
+pip install -e .
 aist scan --target https://your-agent.com \
           --tools email,files,database \
           --output report.html
 ```
 
-> Note: AIST is in active development. Installation will be available at v1.0 release.
+**AIST degrades gracefully based on what you configure:**
+
+| Configuration | Detection Method | Accuracy |
+|--------------|-----------------|----------|
+| Full config (LLM key + canary) | LLM judge + canary trigger | Highest |
+| LLM key only | LLM judge analysis | High |
+| Canary only | Canary trigger + string matching | Medium |
+| No config | String matching only | Basic |
+
+See [docs/canary_setup.md](docs/canary_setup.md) for
+free canary options including canarytokens.org.
+
 
 ---
 
