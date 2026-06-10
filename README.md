@@ -44,6 +44,7 @@ severity based on what the agent can actually do.
 | Streaming response support | Yes | No | No | No |
 | Environment and OS probing | Yes | No | No | No |
 | Adaptive testing via model fingerprinting | Yes | No | No | No |
+| Local execution, no data sent to third parties | Yes | Yes | No | Yes |
 | MITRE ATLAS mapped findings | Yes | No | No | No |
 | SIEM-ready structured logging | Yes | No | No | No |
 | Published threat model | Yes | No | No | No |
@@ -125,6 +126,23 @@ Every scan produces:
 - JSON report for machine processing and pipeline integration
 - SARIF output for native display in GitHub and VS Code
 - SIEM-ready structured JSON audit log
+
+---
+
+## Privacy and Data Sovereignty
+
+AIST runs entirely on your machine.
+
+Your API keys, target endpoints, and vulnerability findings never leave
+your environment. AIST makes no external calls except to the agent you
+are testing and the LLM API you configure for response analysis.
+
+No accounts required. No data sent to third parties. No telemetry.
+No phone home.
+
+This matters for security teams working with sensitive agents. You have
+full visibility into what is being tested and complete control over
+where findings are stored.
 
 ---
 
