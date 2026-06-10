@@ -1,9 +1,0 @@
-git add .
-git commit -m "feat: implement model fingerprinting module
-
-Direct and behavioural fingerprinting probes.
-Model profiles with known weaknesses and
-recommended test categories per provider.
-Adaptive payload selection based on detected model.
-Covers commercial and open source model families."
-git push
