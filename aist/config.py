@@ -34,6 +34,10 @@ class ScanConfig:
     expose_evidence: bool = False
     executive_mode: bool = False
     categories: Optional[list] = None
+    jitter_min_seconds: float = 1.0
+    jitter_max_seconds: float = 5.0
+    rotate_session_between_runs: bool = True
+    backoff_on_rate_limit: bool = True
 
 
 @dataclass
@@ -174,6 +178,24 @@ def load_config(
     config.scan.executive_mode = executive_mode
     config.scan.categories = categories
 
+    # Jitter settings
+    config.scan.jitter_min_seconds = float(
+        os.getenv("JITTER_MIN_SECONDS", "1.0")
+    )
+    config.scan.jitter_max_seconds = float(
+        os.getenv("JITTER_MAX_SECONDS", "5.0")
+    )
+    config.scan.rotate_session_between_runs = (
+        os.getenv(
+            "ROTATE_SESSION_BETWEEN_RUNS", "true"
+        ).lower() == "true"
+    )
+    config.scan.backoff_on_rate_limit = (
+        os.getenv(
+            "BACKOFF_ON_RATE_LIMIT", "true"
+        ).lower() == "true"
+    )
+
     # Target config
     config.target.endpoint = (
         target_endpoint or
@@ -288,6 +310,8 @@ def load_config(
         expose_evidence=config.scan.expose_evidence,
         executive_mode=config.scan.executive_mode,
         categories=config.scan.categories or "all",
+        jitter_min=config.scan.jitter_min_seconds,
+        jitter_max=config.scan.jitter_max_seconds,
     )
 
     return config
