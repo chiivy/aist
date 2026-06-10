@@ -1,0 +1,55 @@
+# AIST Cursor Rules
+# These rules guide Cursor AI behaviour for this project
+
+## Project Context
+AIST is an AI agent security testing tool written in Python.
+It tests target AI agents for prompt injection vulnerabilities.
+The tool itself must be secure -- all agent responses are
+untrusted input and must never be passed raw to any LLM.
+
+## Language and Style
+- Python 3.10+
+- Type hints on all functions
+- Docstrings on all classes and public methods
+- snake_case for variables and functions
+- PascalCase for classes
+- Maximum line length 88 characters (Black formatter)
+- No print statements -- use the logger module only
+
+## Security Rules (non-negotiable)
+- Never hardcode API keys, tokens, or credentials
+- Always use environment variables via python-dotenv
+- Never pass raw agent responses to any LLM component
+- Always sanitise and mask sensitive data before logging
+- Validate and sanitise all user inputs
+- Use httpx not requests for all HTTP calls
+- Set timeouts on all outbound HTTP requests
+- Never use pickle or eval
+
+## File Structure
+- Core package lives in aist/
+- Tests mirror package structure in tests/
+- All payloads are YAML files in aist/payloads/
+- Reports output to reports/ directory
+- Logs output to logs/ directory
+
+## Dependencies
+- httpx for HTTP requests
+- structlog for logging
+- click for CLI
+- jinja2 for HTML report templating
+- pyyaml for payload files
+- python-dotenv for environment variables
+- rich for terminal output
+
+## Testing
+- Every module gets a corresponding test file
+- Use pytest
+- Test files named test_modulename.py
+
+## Git
+- Commit messages start with type:
+  feat, fix, docs, security, test, refactor
+- Always pull before starting work
+- Always push before stopping work
+- Never commit .env files or API keys
