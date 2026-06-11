@@ -24,12 +24,32 @@ log = get_logger(__name__)
 
 def print_banner():
     """Print AIST startup banner."""
-    console.print(Panel.fit(
-        "[bold red]AIST[/bold red] "
-        "[white]Agentic Injection Security Tester[/white]\n"
-        "[dim]github.com/chiivy/aist[/dim]",
-        border_style="red"
-    ))
+    import pyfiglet
+
+    ascii_art = pyfiglet.figlet_format(
+        "AIST",
+        font="slant",
+    )
+
+    console.print(
+        f"[bold red]{ascii_art}[/bold red]",
+        end="",
+    )
+
+    console.print(
+        "[bold white]Agentic Injection Security Tester[/bold white]"
+    )
+    console.print(
+        "[dim red]" + "─" * 50 + "[/dim red]"
+    )
+    console.print(
+        "[dim]  github.com/chiivy/aist[/dim]"
+        "[dim]  |  v1.0  |  [/dim]"
+        "[cyan]inject. detect. report.[/cyan]"
+    )
+    console.print(
+        "[dim red]" + "─" * 50 + "[/dim red]\n"
+    )
 
 
 def confirm_expose_evidence() -> bool:

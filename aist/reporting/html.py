@@ -356,7 +356,7 @@ def _render_template(
         aist_version="1.0",
         report_hash="REPORT_HASH_PLACEHOLDER",
     )
-    HTML_TEMPLATE = """<!DOCTYPE html>
+HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
