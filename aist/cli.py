@@ -8,7 +8,9 @@ Commands:
     aist discover   Run attack surface discovery only
 """
 
+import asyncio
 import sys
+
 import click
 from rich.console import Console
 from rich.panel import Panel
@@ -125,7 +127,8 @@ def main():
     is_flag=True,
     default=False,
     help="Generate executive summary report only. "
-         "No technical details. Safe for non-technical stakeholders."
+         "No technical details. Safe for non-technical "
+         "stakeholders."
 )
 @click.option(
     "--categories",
@@ -140,7 +143,8 @@ def scan(
     executive, categories
 ):
     """
-    Run a full injection security scan against a target agent.
+    Run a full injection security scan against
+    a target agent.
 
     Example:
 
@@ -156,15 +160,19 @@ def scan(
     setup_logging(log_level=log_level)
     print_banner()
 
-    # Handle expose evidence confirmation
     if expose_evidence:
         expose_evidence = confirm_expose_evidence()
 
-    tools_list = [t.strip() for t in tools.split(",") if t.strip()]
+    tools_list = [
+        t.strip() for t in tools.split(",") if t.strip()
+    ]
 
     categories_list = (
         None if categories == "all"
-        else [c.strip().upper() for c in categories.split(",")]
+        else [
+            c.strip().upper()
+            for c in categories.split(",")
+        ]
     )
 
     console.print(f"\n[bold]Target:[/bold] {target}")
@@ -178,11 +186,13 @@ def scan(
         f"[bold]Categories:[/bold] "
         f"{categories if categories == 'all' else categories_list}"
     )
-    console.print(f"[bold]Output:[/bold] {output}")
-    console.print(
-        f"[bold]Expose evidence:[/bold] {expose_evidence}"
-    )
-    console.print(f"[bold]Executive mode:[/bold] {executive}\n")
+    console.print(f"[bold]Output:[/bold] {output}\n")
+
+    if expose_evidence:
+        console.print(
+            "[bold red]Expose evidence mode active. "
+            "Report will contain unmasked values.[/bold red]\n"
+        )
 
     config = load_config(
         target_endpoint=target,
@@ -197,22 +207,55 @@ def scan(
     )
 
     log.info(
-        "scan_started",
+        "scan_command_started",
         target=target,
         tools=tools_list,
         mode=mode,
         runs=runs,
         expose_evidence=expose_evidence,
         executive=executive,
+        categories=categories_list or "all",
     )
 
-    console.print(
-        "[yellow]Scan engine coming in v1.0[/yellow]"
-    )
-    console.print(
-        "[dim]Core modules: recon, scanner, "
-        "evidence, scoring, reporting[/dim]"
-    )
+    from aist.scanner.orchestrator import run_full_scan
+
+    try:
+        results = asyncio.run(
+            run_full_scan(
+                config=config,
+                output_path=output,
+            )
+        )
+
+        log.info(
+            "scan_command_complete",
+            total_findings=results["total_findings"],
+            critical=results["critical"],
+            canary_triggered=results["canary_triggered"],
+            duration=results["duration_seconds"],
+        )
+
+        if results["critical"] > 0 or \
+                results["canary_triggered"]:
+            sys.exit(1)
+
+    except KeyboardInterrupt:
+        console.print(
+            "\n[yellow]Scan interrupted by user.[/yellow]"
+        )
+        sys.exit(130)
+
+    except Exception as e:
+        console.print(
+            f"\n[bold red]Scan failed:[/bold red] "
+            f"{type(e).__name__}: {e}"
+        )
+        log.error(
+            "scan_command_failed",
+            error_type=type(e).__name__,
+            error=str(e),
+        )
+        sys.exit(1)
 
 
 @main.command()
@@ -241,11 +284,11 @@ def scan(
 )
 def discover(target, mode, output, log_level):
     """
-    Run attack surface discovery against a target agent.
+    Run attack surface discovery against a target
+    agent without running any injection payloads.
 
-    Maps what the agent is connected to without
-    running any injection test payloads.
-    Safe to run against production agents in passive mode.
+    Safe to run against production agents in
+    passive mode.
 
     Example:
 
@@ -267,14 +310,105 @@ def discover(target, mode, output, log_level):
     )
 
     log.info(
-        "discovery_started",
+        "discover_command_started",
         target=target,
         mode=mode,
     )
 
-    console.print(
-        "[yellow]Discovery engine coming in v1.0[/yellow]"
-    )
+    async def run_discovery_only():
+        from aist.recon.probe import run_recon
+        from aist.recon.discovery import run_discovery
+        from aist.recon.fingerprint import run_fingerprinting
+
+        console.print(
+            "[dim]Running recon probes...[/dim]"
+        )
+        recon_report = await run_recon(config)
+
+        console.print(
+            "[dim]Mapping attack surface...[/dim]"
+        )
+        discovery_result = await run_discovery(
+            config, recon_report
+        )
+
+        console.print(
+            "[dim]Fingerprinting model...[/dim]"
+        )
+        fingerprint = await run_fingerprinting(
+            config,
+            initial_hint=recon_report.model_hint,
+        )
+
+        return recon_report, discovery_result, fingerprint
+
+    try:
+        recon_report, discovery_result, fingerprint = (
+            asyncio.run(run_discovery_only())
+        )
+
+        console.print(
+            "\n[bold]Attack Surface Map:[/bold]\n"
+        )
+        console.print(
+            f"  Target:          {target}"
+        )
+        console.print(
+            f"  Model detected:  "
+            f"{recon_report.model_hint}"
+        )
+        console.print(
+            f"  Declared tools:  "
+            f"{', '.join(recon_report.declared_tools) or 'none'}"
+        )
+        console.print(
+            f"  Discovered tools: "
+            f"{', '.join(recon_report.discovered_tools) or 'none'}"
+        )
+        console.print(
+            f"  Has memory:      {recon_report.has_memory}"
+        )
+        console.print(
+            f"  RAG detected:    "
+            f"{getattr(discovery_result, 'rag_detected', False)}"
+        )
+        console.print(
+            f"  SSRF potential:  "
+            f"{getattr(discovery_result, 'ssrf_potential', False)}"
+        )
+        console.print(
+            f"  Connected agents: "
+            f"{getattr(discovery_result, 'connected_agents', [])}"
+        )
+        console.print(
+            f"  Severity multiplier: "
+            f"{getattr(discovery_result, 'severity_multiplier', 1.0)}x"
+        )
+
+        log.info(
+            "discover_command_complete",
+            target=target,
+            model=recon_report.model_hint,
+            tools=recon_report.discovered_tools,
+        )
+
+    except KeyboardInterrupt:
+        console.print(
+            "\n[yellow]Discovery interrupted.[/yellow]"
+        )
+        sys.exit(130)
+
+    except Exception as e:
+        console.print(
+            f"\n[bold red]Discovery failed:[/bold red] "
+            f"{type(e).__name__}: {e}"
+        )
+        log.error(
+            "discover_command_failed",
+            error_type=type(e).__name__,
+            error=str(e),
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
