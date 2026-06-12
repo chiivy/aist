@@ -28,6 +28,7 @@ from aist.compliance.mappings import (
 )
 from aist.remediation.generic import get_generic_guidance
 from aist.evidence.masking import mask_for_report
+from aist.evidence.collector import is_genuine_finding
 
 log = get_logger(__name__)
 console = Console()
@@ -167,15 +168,10 @@ def _build_findings(
         if not severity or not confidence:
             continue
 
-        is_finding = (
-            evidence.canary_leaked or
-            evidence.llm_judge_success or
-            evidence.string_match_success or
-            evidence.credentials_detected
-        )
-
-        if not is_finding:
+        if not is_genuine_finding(evidence):
             continue
+
+        is_finding = True
 
         compliance = get_compliance_mapping(
             evidence.payload_category
