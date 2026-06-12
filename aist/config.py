@@ -28,7 +28,7 @@ class ScanConfig:
     max_payload_runs: int = 3
     response_size_limit_kb: int = 500
     scan_timeout_seconds: int = 300
-    log_level: str = "INFO"
+    log_level: str = "WARNING"
     reports_dir: str = "reports"
     logs_dir: str = "logs"
     expose_evidence: bool = False
@@ -38,6 +38,8 @@ class ScanConfig:
     jitter_max_seconds: float = 5.0
     rotate_session_between_runs: bool = True
     backoff_on_rate_limit: bool = True
+    operator: Optional[str] = None
+    organisation: Optional[str] = None
 
 
 @dataclass
@@ -123,6 +125,7 @@ def load_config(
     expose_evidence: bool = False,
     executive_mode: bool = False,
     categories: list = None,
+    operator: str = None,
 ) -> AISTConfig:
     """
     Load configuration from environment variables
@@ -145,6 +148,7 @@ def load_config(
         expose_evidence: Include unmasked values in report
         executive_mode:  Generate executive report only
         categories:      List of payload categories to run
+        operator:        Name/handle of person running scan
 
     Returns:
         Populated AISTConfig object
@@ -154,7 +158,7 @@ def load_config(
     # Scan settings from env with CLI overrides
     config.scan.log_level = (
         log_level or
-        os.getenv("LOG_LEVEL", "INFO")
+        os.getenv("LOG_LEVEL", "WARNING")
     )
     config.scan.max_payload_runs = (
         runs or
@@ -177,6 +181,15 @@ def load_config(
     config.scan.expose_evidence = expose_evidence
     config.scan.executive_mode = executive_mode
     config.scan.categories = categories
+
+    # Operator / audit trail
+    config.scan.operator = (
+        operator or
+        os.getenv("AIST_OPERATOR", "Not specified")
+    )
+    config.scan.organisation = os.getenv(
+        "AIST_ORGANISATION", ""
+    )
 
     # Jitter settings
     config.scan.jitter_min_seconds = float(
@@ -312,6 +325,7 @@ def load_config(
         categories=config.scan.categories or "all",
         jitter_min=config.scan.jitter_min_seconds,
         jitter_max=config.scan.jitter_max_seconds,
+        operator=config.scan.operator,
     )
 
     return config

@@ -9,7 +9,9 @@ Commands:
 """
 
 import asyncio
+import re
 import sys
+from datetime import datetime
 
 import click
 from rich.console import Console
@@ -107,8 +109,9 @@ def main():
 )
 @click.option(
     "--output", "-o",
-    default="reports/aist-report.html",
-    help="Output file path for HTML report"
+    default=None,
+    help="Output file path for HTML report. "
+         "Default: auto-generated timestamped filename."
 )
 @click.option(
     "--mode", "-m",
@@ -126,9 +129,10 @@ def main():
 )
 @click.option(
     "--log-level", "-l",
-    default="INFO",
+    default="WARNING",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
-    help="Logging verbosity"
+    help="Logging verbosity. Default: WARNING "
+         "keeps console clean."
 )
 @click.option(
     "--siem",
@@ -157,10 +161,17 @@ def main():
          "e.g. A,B,G or 'all' for everything. "
          "Default: all"
 )
+@click.option(
+    "--operator",
+    default=None,
+    help="Name or handle of person running the scan. "
+         "Appears in report for audit purposes. "
+         "Can also be set via AIST_OPERATOR in .env"
+)
 def scan(
     target, tools, output, mode, runs,
     log_level, siem, expose_evidence,
-    executive, categories
+    executive, categories, operator
 ):
     """
     Run a full injection security scan against
@@ -170,7 +181,7 @@ def scan(
 
         aist scan --target https://agent.example.com
                   --tools email,files,database
-                  --output report.html
+                  --operator chiivy
 
     With expose mode for remediation:
 
@@ -195,6 +206,17 @@ def scan(
         ]
     )
 
+    if output is None:
+        timestamp = datetime.now().strftime(
+            "%Y-%m-%d-%H-%M"
+        )
+        safe_target = re.sub(
+            r'[^\w]', '-', target
+        )[:30].strip("-")
+        output = (
+            f"reports/aist-{timestamp}-{safe_target}.html"
+        )
+
     console.print(f"\n[bold]Target:[/bold] {target}")
     console.print(
         f"[bold]Tools declared:[/bold] "
@@ -206,7 +228,11 @@ def scan(
         f"[bold]Categories:[/bold] "
         f"{categories if categories == 'all' else categories_list}"
     )
-    console.print(f"[bold]Output:[/bold] {output}\n")
+    console.print(f"[bold]Output:[/bold] {output}")
+    console.print(
+        f"[bold]Operator:[/bold] "
+        f"{operator or 'Not specified'}\n"
+    )
 
     if expose_evidence:
         console.print(
@@ -224,6 +250,7 @@ def scan(
         expose_evidence=expose_evidence,
         executive_mode=executive,
         categories=categories_list,
+        operator=operator,
     )
 
     log.info(
@@ -232,9 +259,7 @@ def scan(
         tools=tools_list,
         mode=mode,
         runs=runs,
-        expose_evidence=expose_evidence,
-        executive=executive,
-        categories=categories_list or "all",
+        operator=operator or "not_specified",
     )
 
     from aist.scanner.orchestrator import run_full_scan
@@ -293,16 +318,21 @@ def scan(
 )
 @click.option(
     "--output", "-o",
-    default="reports/aist-surface-map.html",
-    help="Output file path for surface map report"
+    default=None,
+    help="Output file path for surface map report."
 )
 @click.option(
     "--log-level", "-l",
-    default="INFO",
+    default="WARNING",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
-    help="Logging verbosity"
+    help="Logging verbosity."
 )
-def discover(target, mode, output, log_level):
+@click.option(
+    "--operator",
+    default=None,
+    help="Name or handle of person running discovery."
+)
+def discover(target, mode, output, log_level, operator):
     """
     Run attack surface discovery against a target
     agent without running any injection payloads.
@@ -314,25 +344,42 @@ def discover(target, mode, output, log_level):
 
         aist discover --target https://agent.example.com
                       --mode passive
-                      --output surface-map.html
     """
     setup_logging(log_level=log_level)
     print_banner()
 
+    if output is None:
+        timestamp = datetime.now().strftime(
+            "%Y-%m-%d-%H-%M"
+        )
+        safe_target = re.sub(
+            r'[^\w]', '-', target
+        )[:30].strip("-")
+        output = (
+            f"reports/aist-discovery-"
+            f"{timestamp}-{safe_target}.html"
+        )
+
     console.print(f"\n[bold]Target:[/bold] {target}")
     console.print(f"[bold]Mode:[/bold] {mode}")
-    console.print(f"[bold]Output:[/bold] {output}\n")
+    console.print(f"[bold]Output:[/bold] {output}")
+    console.print(
+        f"[bold]Operator:[/bold] "
+        f"{operator or 'Not specified'}\n"
+    )
 
     config = load_config(
         target_endpoint=target,
         mode=mode,
         log_level=log_level,
+        operator=operator,
     )
 
     log.info(
         "discover_command_started",
         target=target,
         mode=mode,
+        operator=operator or "not_specified",
     )
 
     async def run_discovery_only():
@@ -370,15 +417,13 @@ def discover(target, mode, output, log_level):
         console.print(
             "\n[bold]Attack Surface Map:[/bold]\n"
         )
+        console.print(f"  Target:           {target}")
         console.print(
-            f"  Target:          {target}"
-        )
-        console.print(
-            f"  Model detected:  "
+            f"  Model detected:   "
             f"{recon_report.model_hint}"
         )
         console.print(
-            f"  Declared tools:  "
+            f"  Declared tools:   "
             f"{', '.join(recon_report.declared_tools) or 'none'}"
         )
         console.print(
@@ -386,14 +431,14 @@ def discover(target, mode, output, log_level):
             f"{', '.join(recon_report.discovered_tools) or 'none'}"
         )
         console.print(
-            f"  Has memory:      {recon_report.has_memory}"
+            f"  Has memory:       {recon_report.has_memory}"
         )
         console.print(
-            f"  RAG detected:    "
+            f"  RAG detected:     "
             f"{getattr(discovery_result, 'rag_detected', False)}"
         )
         console.print(
-            f"  SSRF potential:  "
+            f"  SSRF potential:   "
             f"{getattr(discovery_result, 'ssrf_potential', False)}"
         )
         console.print(
@@ -404,6 +449,8 @@ def discover(target, mode, output, log_level):
             f"  Severity multiplier: "
             f"{getattr(discovery_result, 'severity_multiplier', 1.0)}x"
         )
+        if operator:
+            console.print(f"  Operator:         {operator}")
 
         log.info(
             "discover_command_complete",

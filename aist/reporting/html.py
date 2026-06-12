@@ -355,6 +355,8 @@ def _render_template(
         expose_evidence=config.scan.expose_evidence,
         aist_version="1.0",
         report_hash="REPORT_HASH_PLACEHOLDER",
+        operator=config.scan.operator,
+        organisation=config.scan.organisation,
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -1006,13 +1008,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
 
-    <div class="scan-info-card">
-      <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 0.5rem;">
+    <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 0.5rem;">
         Scan Information
       </div>
       <div class="info-row">
         <span class="info-key">Target</span>
         <span class="info-value">{{ target }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-key">Operator</span>
+        <span class="info-value">
+          {{ operator }}{% if organisation %} ({{ organisation }}){% endif %}
+        </span>
       </div>
       <div class="info-row">
         <span class="info-key">Scan Date</span>
