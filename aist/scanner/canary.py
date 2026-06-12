@@ -198,6 +198,9 @@ async def run_canary_check(
                         canary_leaked=evidence.canary_leaked,
                     )
                 )
+                all_run_results[
+                    f"{canary_id}-P{probe_num + 1}"
+                ] = [run_results[-1]]
 
                 if evidence.canary_leaked:
                     log.warning(
