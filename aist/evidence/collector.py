@@ -384,6 +384,15 @@ No other text before or after the JSON object.
             payload_id=evidence.payload_id,
             error_type=type(e).__name__,
         )
+        if "Connect" in type(e).__name__:
+            # Network error -- judge could not reach
+            # the LLM API. This is not evidence of
+            # injection success or failure. Clear
+            # string_match_success so a keyword match
+            # in the response does not get promoted
+            # to a finding due to network unavailability.
+            evidence.llm_judge_success = None
+            evidence.string_match_success = False
 
     return evidence
 
