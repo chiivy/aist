@@ -29,7 +29,7 @@ from rich.panel import Panel
 
 from aist.logger import get_logger
 from aist.config import AISTConfig
-from aist.evidence.collector import ScanEvidence
+from aist.evidence.collector import ScanEvidence, is_genuine_finding
 from aist.recon.probe import run_recon
 from aist.recon.discovery import run_discovery
 from aist.recon.fingerprint import run_fingerprinting
@@ -322,6 +322,16 @@ async def run_full_scan(
 
             progress.advance(score_task)
 
+        # Filter to genuine findings only.
+        # This MUST match the same logic used by
+        # html.py, json_report.py, and sarif.py
+        # so console output, exit codes, and reports
+        # always agree with each other.
+        genuine_severity_scores = [
+            s for s, e in zip(severity_scores, all_evidence)
+            if is_genuine_finding(e)
+        ]
+
         # Phase 5: Reports
         report_task = progress.add_task(
             "[green]Generating reports...",
@@ -371,7 +381,7 @@ async def run_full_scan(
 
     _print_scan_summary(
         scan_evidence,
-        severity_scores,
+        genuine_severity_scores,
         confidence_scores,
         html_path,
         scan_duration,
@@ -379,24 +389,21 @@ async def run_full_scan(
 
     return {
         "target": config.target.endpoint,
-        "total_findings": len([
-            s for s in severity_scores
-            if s.final_score > 0
-        ]),
+        "total_findings": len(genuine_severity_scores),
         "critical": sum(
-            1 for s in severity_scores
+            1 for s in genuine_severity_scores
             if s.severity_label == "Critical"
         ),
         "high": sum(
-            1 for s in severity_scores
+            1 for s in genuine_severity_scores
             if s.severity_label == "High"
         ),
         "medium": sum(
-            1 for s in severity_scores
+            1 for s in genuine_severity_scores
             if s.severity_label == "Medium"
         ),
         "low": sum(
-            1 for s in severity_scores
+            1 for s in genuine_severity_scores
             if s.severity_label == "Low"
         ),
         "canary_triggered": (
@@ -469,7 +476,13 @@ def _print_scan_summary(
     html_path,
     duration,
 ) -> None:
-    """Print final scan summary to console."""
+    """
+    Print final scan summary to console.
+
+    severity_scores here should be genuine_severity_scores
+    (already filtered by is_genuine_finding) so the
+    console counts match the HTML/JSON/SARIF reports.
+    """
     critical = sum(
         1 for s in severity_scores
         if s.severity_label == "Critical"
@@ -566,4 +579,4 @@ def _get_pattern_boost(pattern_name: str) -> float:
         "azure_metadata": 3.0,
         "gcp_metadata": 3.0,
     }
-    return boosts.get(pattern_name, 0.5)
+    return boosts.get(pattern_name, 0.5)x   
