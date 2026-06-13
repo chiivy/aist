@@ -1085,6 +1085,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
 
       <div class="surface-item">
+        <div class="surface-item-label">System Prompt</div>
+        <div class="surface-item-value">
+          {% if attack_surface.system_prompt_exposed %}
+          <span class="tag tag-red">Exposed During Recon</span>
+          {% else %}
+          <span class="tag tag-green">Protected</span>
+          {% endif %}
+        </div>
+      </div>
+      
+      <div class="surface-item">
         <div class="surface-item-label">Memory</div>
         <div class="surface-item-value">
           {% if attack_surface.has_memory %}
