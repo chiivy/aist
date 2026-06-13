@@ -348,6 +348,21 @@ async def run_full_scan(
                 1.0 if is_recon else discovery_multiplier
             )
 
+            # Recon findings bypass tool scoring entirely.
+            # They are the SOURCE of the tool discovery,
+            # not findings made more dangerous by tools.
+            # Passing empty tool lists prevents the tool
+            # addition from inflating recon finding scores.
+            if is_recon:
+                scoring_tools = []
+                scoring_discovered = []
+            else:
+                scoring_tools = config.target.tools
+                scoring_discovered = (
+                    recon_report.discovered_tools
+                    if recon_report else []
+                )
+
             severity = calculate_severity(
                 payload_id=evidence.payload_id,
                 payload_severity_base=_get_severity_base(
@@ -357,18 +372,15 @@ async def run_full_scan(
                     _get_pattern_boost(p)
                     for p in evidence.sensitive_patterns
                 ),
-                declared_tools=config.target.tools,
-                discovered_tools=(
-                    recon_report.discovered_tools
-                    if recon_report else []
-                ),
+                declared_tools=scoring_tools,
+                discovered_tools=scoring_discovered,
                 discovery_multiplier=effective_multiplier,
                 canary_leaked=evidence.canary_leaked,
                 credentials_detected=(
                     evidence.credentials_detected
                 ),
             )
-
+            
             confidence = calculate_confidence(
                 payload_id=evidence.payload_id,
                 run_results=run_results,
