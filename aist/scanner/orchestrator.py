@@ -579,4 +579,4 @@ def _get_pattern_boost(pattern_name: str) -> float:
         "azure_metadata": 3.0,
         "gcp_metadata": 3.0,
     }
-    return boosts.get(pattern_name, 0.5)x   
+    return boosts.get(pattern_name, 0.5)
