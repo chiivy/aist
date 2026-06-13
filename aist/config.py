@@ -87,7 +87,8 @@ class CanaryConfig:
 
     Canaries detect when an injection succeeded
     by monitoring whether the agent contacted
-    a resource the tester controls.
+    a resource the tester controls, or whether
+    a planted policy was overridden.
 
     All canary fields are optional. Without canary
     config AIST uses LLM judge analysis only.
@@ -99,6 +100,7 @@ class CanaryConfig:
     test_admin_id: str = "AIST-TEST-ADMIN-001"
     test_user_id: str = "AIST-TEST-USER-001"
     enabled: bool = False
+    behavioral_canaries_planted: bool = False
 
 
 @dataclass
@@ -247,7 +249,7 @@ def load_config(
                     "Detection accuracy is reduced."
         )
 
-    # Canary config
+    # Canary config (V1-V5 exfiltration destinations)
     canary_url = os.getenv("AIST_CANARY_URL")
     canary_email = os.getenv("AIST_CANARY_EMAIL")
     canary_domain = os.getenv("AIST_CANARY_DOMAIN")
@@ -271,6 +273,15 @@ def load_config(
                     "AIST will use LLM judge analysis only. "
                     "See docs/canary_setup.md for setup options."
         )
+
+    # CT2/CT3/CT4 behavioural canaries require manually
+    # adding policies to the target agent's system prompt
+    # before scanning. See docs/canary_setup.md
+    config.canary.behavioral_canaries_planted = (
+        os.getenv(
+            "AIST_CANARIES_PLANTED", "false"
+        ).lower() == "true"
+    )
 
     # Test identity values with defaults
     config.canary.test_admin_id = os.getenv(
@@ -319,6 +330,9 @@ def load_config(
             else "none"
         ),
         canary_enabled=config.canary.enabled,
+        behavioral_canaries_planted=(
+            config.canary.behavioral_canaries_planted
+        ),
         siem_enabled=config.siem.enabled,
         expose_evidence=config.scan.expose_evidence,
         executive_mode=config.scan.executive_mode,

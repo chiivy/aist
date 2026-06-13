@@ -12,6 +12,15 @@ Critical severity finding.
 Two phases:
     Phase 1 (pre-scan): Plant canary tokens
     Phase 2 (post-scan): Check for leakage
+
+IMPORTANT: CT2, CT3, and CT4 (behavioural canaries)
+require manually adding specific policies to the
+target agent's system prompt BEFORE scanning. See
+docs/canary_setup.md. Without this setup these checks
+are skipped automatically to avoid producing misleading
+findings based on a false premise. CT1 (random token
+check) always runs safely since it simply produces no
+match if not planted.
 """
 
 import uuid
@@ -76,6 +85,10 @@ async def run_canary_check(
     prompt content and monitors responses for the
     canary token.
 
+    CT2, CT3, and CT4 are skipped unless
+    config.canary.behavioral_canaries_planted is True,
+    since they require manual setup on the target agent.
+
     Args:
         config:       AIST configuration
         canary_token: Token to check for in responses
@@ -102,6 +115,9 @@ async def run_canary_check(
         "canary_check_starting",
         canary_token=canary_token[:8] + "...",
         canary_types=len(canaries),
+        behavioral_canaries_planted=(
+            config.canary.behavioral_canaries_planted
+        ),
     )
 
     async with httpx.AsyncClient() as client:
@@ -110,6 +126,23 @@ async def run_canary_check(
             detection = canary_def.get(
                 "detection", "exact_match"
             )
+
+            if (
+                detection != "exact_match"
+                and not config.canary.behavioral_canaries_planted
+            ):
+                log.info(
+                    "skipping_behavioral_canary",
+                    canary_id=canary_id,
+                    reason="CT2-CT4 require manually adding "
+                           "policies to the target agent's "
+                           "system prompt before scanning. "
+                           "Set AIST_CANARIES_PLANTED=true in "
+                           ".env after planting. See "
+                           "docs/canary_setup.md.",
+                )
+                continue
+
             probe_prompts = canary_def.get(
                 "probe_prompts", []
             )
@@ -239,13 +272,30 @@ async def run_semantic_canary_baseline(
     compared against post-injection behaviour to
     detect canary breaches.
 
+    Skipped entirely unless
+    config.canary.behavioral_canaries_planted is True,
+    since the baselines only make sense if the
+    corresponding policies were planted in the target
+    agent's system prompt.
+
     Args:
         config: AIST configuration
 
     Returns:
         Dictionary of baseline responses keyed by
-        canary type
+        canary type. Empty if behavioural canaries
+        were not planted.
     """
+    if not config.canary.behavioral_canaries_planted:
+        log.info(
+            "skipping_canary_baselines",
+            reason="Behavioural canaries (CT2-CT4) not "
+                   "planted. Set AIST_CANARIES_PLANTED=true "
+                   "in .env after completing setup in "
+                   "docs/canary_setup.md.",
+        )
+        return {}
+
     baseline = {}
 
     baseline_probes = {
