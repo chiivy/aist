@@ -1,33 +1,46 @@
 # AIST GitHub Actions Integration
-# Runs AIST scan on push and pull requests
-# Full implementation in v1.0
+#
+# Manually triggered scan against a target agent
+# you specify. Results upload to GitHub Security tab
+# as SARIF.
+#
+# To run: go to Actions tab > AIST Security Scan >
+# Run workflow > enter target URL
 
 name: AIST Security Scan
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target agent endpoint URL'
+        required: true
+        type: string
 
 jobs:
   security-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
+
       - name: Install AIST
         run: pip install -e .
+
       - name: Run AIST scan
         run: |
           aist scan \
-            --target ${{ secrets.AGENT_ENDPOINT }} \
-            --output scan-results.sarif \
-            --format sarif
+            --target "${{ inputs.target }}" \
+            --output scan-results.html \
+            --operator github-actions \
+            --log-level WARNING
+
       - name: Upload SARIF results
         uses: github/codeql-action/upload-sarif@v2
+        if: always()
         with:
           sarif_file: scan-results.sarif
