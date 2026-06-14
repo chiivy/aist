@@ -380,7 +380,7 @@ async def run_full_scan(
                     evidence.credentials_detected
                 ),
             )
-            
+
             confidence = calculate_confidence(
                 payload_id=evidence.payload_id,
                 run_results=run_results,
@@ -692,7 +692,7 @@ def _recon_to_evidence(
                 "This is a confirmed information disclosure "
                 "vulnerability."
             ),
-            sensitive_patterns=["system_prompt_fragment"],
+            sensitive_patterns=[],
         ))
 
         log.warning(
