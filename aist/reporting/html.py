@@ -447,6 +447,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     grid-template-columns: 280px 1fr 1fr;
     gap: 1.5rem;
     margin-bottom: 3rem;
+    min-width: 0;
   }
 
   .risk-card {
@@ -540,6 +541,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     border: 1px solid #2d3748;
     border-radius: 12px;
     padding: 2rem;
+    min-width: 0;
   }
 
   .info-row {
@@ -1173,8 +1175,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </span>
             <span class="finding-id">{{ finding.payload_id }}</span>
             <span style="color: #e2e8f0; font-size: 0.9rem;">
-              {{ finding.payload_category }} -
-              {% if finding.canary_leaked %}
+              {% if finding.payload_id == 'RECON-D1' %}
+                System Prompt Exposed During Recon
+              {% elif finding.payload_id == 'RECON-H4' %}
+                SSRF Potential Detected
+              {% elif finding.payload_id == 'RECON-E1' %}
+                Undeclared Tools Discovered
+              {% elif finding.payload_id == 'RECON-S1' %}
+                Connected Agents Disclosed
+              {% elif finding.canary_leaked %}
                 Canary Token Leaked
               {% elif finding.credentials_detected %}
                 Credential Exposure
