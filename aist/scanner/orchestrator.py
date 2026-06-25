@@ -127,6 +127,13 @@ async def run_full_scan(
         f"[cyan]{config.target.endpoint}[/cyan]\n"
     )
 
+    if config.scan.safe_mode:
+        console.print(
+            "[yellow]Safe mode enabled. Skipping categories "
+            "E, H, S to avoid triggering real actions on "
+            "target.[/yellow]\n"
+        )
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -227,23 +234,44 @@ async def run_full_scan(
             )
 
             if scanner_name == "direct":
+                direct_cats = [
+                    "A", "B", "C", "D", "E", "F"
+                ]
+                if config.scan.safe_mode:
+                    direct_cats = [
+                        c for c in direct_cats if c != "E"
+                    ]
                 if not categories or any(
-                    c in ["A", "B", "C", "D", "E", "F"]
+                    c in direct_cats
                     for c in (categories or [])
                 ):
+                    run_cats = categories
+                    if config.scan.safe_mode:
+                        if categories:
+                            run_cats = [
+                                c for c in categories
+                                if c not in {
+                                    "E", "H", "S", "V",
+                                    "INDIRECT",
+                                }
+                            ]
+                        else:
+                            run_cats = direct_cats
                     evidence, results = (
                         await run_direct_scanner(
                             config,
                             canary_token,
-                            categories,
+                            run_cats,
                         )
                     )
                     all_evidence.extend(evidence)
                     all_run_results.update(results)
 
             elif scanner_name == "indirect":
-                if not categories or "INDIRECT" in (
-                    categories or []
+                if not config.scan.safe_mode and (
+                    not categories or "INDIRECT" in (
+                        categories or []
+                    )
                 ):
                     evidence, results = (
                         await run_indirect_scanner(
@@ -254,8 +282,10 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             elif scanner_name == "multiturn":
-                if not categories or "S" in (
-                    categories or []
+                if not config.scan.safe_mode and (
+                    not categories or "S" in (
+                        categories or []
+                    )
                 ):
                     evidence, results = (
                         await run_multiturn_scanner(
@@ -278,8 +308,10 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             elif scanner_name == "toolparam":
-                if not categories or "H" in (
-                    categories or []
+                if not config.scan.safe_mode and (
+                    not categories or "H" in (
+                        categories or []
+                    )
                 ):
                     evidence, results = (
                         await run_toolparam_scanner(

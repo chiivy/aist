@@ -168,10 +168,32 @@ def main():
          "Appears in report for audit purposes. "
          "Can also be set via AIST_OPERATOR in .env"
 )
+@click.option("--auth-type", default="none",
+    help="Auth type: none, bearer, basic, apikey, sso, cookie")
+@click.option("--auth-token", default=None,
+    help="Bearer token or API key value")
+@click.option("--auth-header", default="Authorization",
+    help="Header name for token or apikey")
+@click.option("--auth-username", default=None,
+    help="Username for basic auth")
+@click.option("--auth-password", default=None,
+    help="Password for basic auth")
+@click.option("--auth-login-url", default=None,
+    help="Login endpoint URL for basic auth")
+@click.option("--auth-tenant-id", default=None,
+    help="Azure AD tenant ID for SSO")
+@click.option("--auth-client-id", default=None,
+    help="Azure AD client ID for SSO")
+@click.option("--safe-mode", is_flag=True, default=False,
+    help="Skip payload categories that could trigger "
+         "real actions. Use on production systems.")
 def scan(
     target, tools, output, mode, runs,
     log_level, siem, expose_evidence,
-    executive, categories, operator
+    executive, categories, operator,
+    auth_type, auth_token, auth_header,
+    auth_username, auth_password, auth_login_url,
+    auth_tenant_id, auth_client_id, safe_mode,
 ):
     """
     Run a full injection security scan against
@@ -253,6 +275,16 @@ def scan(
         operator=operator,
     )
 
+    config.auth.auth_type = auth_type
+    config.auth.token = auth_token
+    config.auth.header_name = auth_header or "Authorization"
+    config.auth.username = auth_username
+    config.auth.password = auth_password
+    config.auth.login_url = auth_login_url
+    config.auth.tenant_id = auth_tenant_id
+    config.auth.client_id = auth_client_id
+    config.scan.safe_mode = safe_mode
+
     log.info(
         "scan_command_started",
         target=target,
@@ -332,6 +364,39 @@ def scan(
     default=None,
     help="Name or handle of person running discovery."
 )
+@click.option("--auth-type",
+    default="none",
+    help="Auth type: none, bearer, basic, "
+         "apikey, sso, cookie")
+@click.option("--auth-token",
+    default=None,
+    help="Bearer token or API key")
+@click.option("--auth-header",
+    default="Authorization",
+    help="Header name for token/apikey")
+@click.option("--auth-username",
+    default=None,
+    help="Username for basic auth")
+@click.option("--auth-password",
+    default=None,
+    help="Password for basic auth")
+@click.option("--auth-login-url",
+    default=None,
+    help="Login endpoint for basic auth")
+@click.option("--auth-tenant-id",
+    default=None,
+    help="Azure AD tenant ID for SSO")
+@click.option("--auth-client-id",
+    default=None,
+    help="Azure AD client ID for SSO")
+@click.option("--safe-mode",
+    is_flag=True,
+    default=False,
+    help="Skip payload categories that "
+         "could trigger real actions "
+         "(E, H, V). Use on production "
+         "or critical infrastructure.")
+
 def discover(target, mode, output, log_level, operator):
     """
     Run attack surface discovery against a target

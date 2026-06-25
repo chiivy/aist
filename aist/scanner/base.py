@@ -117,10 +117,42 @@ async def jitter(config: AISTConfig) -> None:
 
 async def send_payload(
     client: httpx.AsyncClient,
-    prompt: str,
+    payload: str,
     config: AISTConfig,
     session_id: Optional[str] = None,
+    *,
+    auth_headers: dict = None,
+    auth_cookies: dict = None,
 ) -> Optional[httpx.Response]:
+    """Send a single payload to the target agent."""
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+
+    if session_id:
+        headers["X-Session-ID"] = session_id
+
+    # Attach auth headers if provided
+    if auth_headers:
+        headers.update(auth_headers)
+
+    cookies = auth_cookies or {}
+
+    try:
+        response = await client.post(
+            config.target.endpoint,
+            json={"message": payload},
+            headers=headers,
+            cookies=cookies,
+            timeout=30,
+        )
+        return response
+
+    except Exception as e:
+        log.warning("send_payload_error",
+            error=str(e))
+        return None
     """
     Send a single payload to the target agent.
 

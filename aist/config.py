@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 from dotenv import load_dotenv
+from aist.auth.manager import AuthConfig
 
 from aist.logger import get_logger
 
@@ -40,6 +41,7 @@ class ScanConfig:
     backoff_on_rate_limit: bool = True
     operator: Optional[str] = None
     organisation: Optional[str] = None
+    safe_mode: bool = False
 
 
 @dataclass
@@ -114,7 +116,7 @@ class AISTConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     siem: SIEMConfig = field(default_factory=SIEMConfig)
     canary: CanaryConfig = field(default_factory=CanaryConfig)
-
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
 def load_config(
     target_endpoint: str = None,
@@ -210,6 +212,9 @@ def load_config(
             "BACKOFF_ON_RATE_LIMIT", "true"
         ).lower() == "true"
     )
+    config.scan.safe_mode = os.getenv(
+        "AIST_SAFE_MODE", "false"
+    ).lower() == "true"
 
     # Target config
     config.target.endpoint = (
@@ -312,6 +317,27 @@ def load_config(
                     "Provide via --target flag."
         )
 
+    # Auth config
+    config.auth = AuthConfig(
+        auth_type=os.getenv(
+            "AIST_AUTH_TYPE", "none"
+        ),
+        token=os.getenv("AIST_AUTH_TOKEN"),
+        header_name=os.getenv(
+            "AIST_AUTH_HEADER", "Authorization"
+        ),
+        username=os.getenv("AIST_AUTH_USERNAME"),
+        password=os.getenv("AIST_AUTH_PASSWORD"),
+        login_url=os.getenv("AIST_AUTH_LOGIN_URL"),
+        tenant_id=os.getenv("AIST_AUTH_TENANT_ID"),
+        client_id=os.getenv("AIST_AUTH_CLIENT_ID"),
+        cookie_name=os.getenv(
+            "AIST_AUTH_COOKIE_NAME", "session"
+        ),
+        cookie_value=os.getenv(
+            "AIST_AUTH_COOKIE_VALUE"
+        ),
+    )
     # Create output directories if they do not exist
     os.makedirs(config.scan.reports_dir, exist_ok=True)
     os.makedirs(config.scan.logs_dir, exist_ok=True)
