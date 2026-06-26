@@ -38,6 +38,7 @@ log = get_logger(__name__)
 async def run_multiturn_scanner(
     config: AISTConfig,
     canary_token: Optional[str] = None,
+    auth_manager=None,
 ) -> tuple:
     """
     Run multi-turn attack sequences against
@@ -124,6 +125,7 @@ async def run_multiturn_scanner(
                     turn_prompt,
                     config,
                     session_id,
+                    auth_manager=auth_manager,
                 )
 
                 if response is None:

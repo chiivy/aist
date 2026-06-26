@@ -89,6 +89,8 @@ def generate_html_report(
         discovery_result,
     )
 
+    artifact_cards = _build_artifact_cards(scan_evidence)
+
     # Render HTML
     html = _render_template(
         findings=findings,
@@ -97,6 +99,7 @@ def generate_html_report(
         compliance_summary=compliance_summary,
         config=config,
         scan_evidence=scan_evidence,
+        artifact_cards=artifact_cards,
     )
 
     # Sign report
@@ -143,6 +146,377 @@ def save_html_report(
     )
 
     return str(path.absolute())
+
+
+EXECUTIVE_FINDING_TITLES = {
+    "RECON-D1": "System prompt exposed",
+    "RECON-E1": "Undeclared tools discovered",
+    "RECON-H4": "SSRF potential detected",
+    "RECON-S1": "Connected agents disclosed",
+}
+
+
+def _get_executive_finding_title(payload_id: str) -> str:
+    """Plain-English finding title for executive report."""
+    if payload_id in EXECUTIVE_FINDING_TITLES:
+        return EXECUTIVE_FINDING_TITLES[payload_id]
+    if payload_id.startswith("RECON-"):
+        return "Attack surface exposure"
+    if payload_id.startswith("BL"):
+        return "Business rule violation"
+    if payload_id.startswith("CANARY"):
+        return "Sensitive data leaked"
+    return "Injection vulnerability detected"
+
+
+def _get_business_impact(
+    payload_id: str,
+    payload_category: str,
+) -> str:
+    """Map finding to plain-English business impact."""
+    if payload_id.startswith("RECON-"):
+        return "Attack surface exposure"
+    category = payload_category or payload_id[:1]
+    impacts = {
+        "D": "Confidential data exposure",
+        "E": "Unauthorised system actions",
+        "H": "Data manipulation risk",
+        "BL": "Business rule violations",
+        "MA": "Cross-agent compromise risk",
+    }
+    return impacts.get(
+        category,
+        "Security controls may not adequately protect users",
+    )
+
+
+def _build_executive_recommendations(findings: list) -> list:
+    """Build plain-English remediation steps."""
+    categories = {
+        f.get("payload_category", "")
+        for f in findings
+    }
+    payload_ids = {f.get("payload_id", "") for f in findings}
+    recs = []
+
+    if "D" in categories or any(
+        p.startswith("RECON-D") for p in payload_ids
+    ):
+        recs.append(
+            "Instruct the AI system not to repeat its "
+            "internal instructions when asked."
+        )
+    if "E" in categories or "RECON-E1" in payload_ids:
+        recs.append(
+            "Review what tools and data the AI can access "
+            "and remove unnecessary permissions."
+        )
+    if "H" in categories or "RECON-H4" in payload_ids:
+        recs.append(
+            "Restrict the AI from making outbound network "
+            "requests to internal or untrusted addresses."
+        )
+    if "BL" in categories or any(
+        p.startswith("BL") for p in payload_ids
+    ):
+        recs.append(
+            "Enforce business rules and approval limits "
+            "outside the AI layer, not inside prompts."
+        )
+    if any(p.startswith("MA") for p in payload_ids):
+        recs.append(
+            "Restrict cross-agent communication so "
+            "injection in one agent cannot propagate "
+            "to connected agents."
+        )
+    if any(p.startswith("RECON-S") for p in payload_ids):
+        recs.append(
+            "Limit what the AI reveals about connected "
+            "systems and other agents."
+        )
+    if not recs:
+        recs.append(
+            "Review AI agent security controls and "
+            "test again after remediation."
+        )
+    recs.append(
+        "Schedule regular security testing as the "
+        "agent and its integrations change."
+    )
+    return recs[:5]
+
+
+def _build_executive_summary_sentence(summary: dict) -> str:
+    """One-sentence risk summary for executives."""
+    parts = []
+    for label in ("Critical", "High", "Medium", "Low"):
+        count = summary.get(label.lower(), 0)
+        if count:
+            parts.append(f"{count} {label}")
+    if not parts:
+        return (
+            "No significant vulnerabilities were detected "
+            "during this assessment."
+        )
+    joined = ", ".join(parts[:-1])
+    if len(parts) > 1:
+        joined = f"{joined} and {parts[-1]}"
+    else:
+        joined = parts[0]
+    return (
+        f"This agent has {joined} severity "
+        f"vulnerabilities requiring attention."
+    )
+
+
+def generate_executive_html_report(
+    scan_evidence,
+    severity_scores: list,
+    confidence_scores: list,
+    config,
+) -> str:
+    """
+    Generate an executive-grade HTML summary report.
+
+    Contains risk scorecard, top findings, compliance
+    snapshot, and plain-English recommendations only.
+    """
+    findings = _build_findings(
+        scan_evidence,
+        severity_scores,
+        confidence_scores,
+        config,
+    )
+    summary = _build_summary(findings, scan_evidence)
+    top_findings = []
+    for f in findings[:10]:
+        top_findings.append({
+            "title": _get_executive_finding_title(
+                f["payload_id"]
+            ),
+            "severity": f["severity_label"],
+            "impact": _get_business_impact(
+                f["payload_id"],
+                f.get("payload_category", ""),
+            ),
+        })
+
+    finding_categories = [
+        f.get("payload_category", "")
+        for f in findings
+        if f.get("is_finding")
+    ]
+    compliance = get_compliance_summary(finding_categories)
+    recommendations = _build_executive_recommendations(
+        findings
+    )
+    summary_sentence = _build_executive_summary_sentence(
+        summary
+    )
+    artifacts_sentence = _build_artifacts_summary_sentence(
+        scan_evidence
+    )
+
+    env = Environment(loader=BaseLoader())
+    template = env.from_string(EXECUTIVE_HTML_TEMPLATE)
+    return template.render(
+        target=scan_evidence.target,
+        scan_date=datetime.now().strftime(
+            "%B %d, %Y at %H:%M UTC"
+        ),
+        operator=config.scan.operator or "Not specified",
+        overall_rating=summary["overall_rating"],
+        overall_color=summary["overall_color"],
+        overall_score=summary["overall_score"],
+        summary_sentence=summary_sentence,
+        artifacts_sentence=artifacts_sentence,
+        top_findings=top_findings,
+        owasp_violations=compliance.get(
+            "owasp_violations", []
+        ),
+        eu_articles=compliance.get("eu_articles", []),
+        soc2_criteria=compliance.get("soc2_criteria", []),
+        recommendations=recommendations,
+        aist_version="1.0",
+    )
+
+
+EXECUTIVE_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIST Executive Summary - {{ target }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont,
+      'Segoe UI', Roboto, sans-serif;
+    background: #f8fafc;
+    color: #1e293b;
+    line-height: 1.6;
+    padding: 2rem;
+  }
+  .header {
+    border-bottom: 3px solid #ef4444;
+    padding-bottom: 1.5rem;
+    margin-bottom: 2rem;
+  }
+  .logo { font-size: 2rem; font-weight: 800; color: #ef4444; }
+  .meta { color: #64748b; font-size: 0.9rem; margin-top: 0.5rem; }
+  .scorecard {
+    background: white;
+    border-radius: 12px;
+    padding: 2rem;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    margin-bottom: 2rem;
+  }
+  .score-value {
+    font-size: 3.5rem;
+    font-weight: 800;
+    margin: 0.5rem 0;
+  }
+  .score-critical { color: #dc2626; }
+  .score-high { color: #ea580c; }
+  .score-medium { color: #ca8a04; }
+  .score-low { color: #16a34a; }
+  .score-label {
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .summary-sentence {
+    font-size: 1.1rem;
+    color: #475569;
+    margin-top: 1rem;
+  }
+  h2 {
+    font-size: 1.25rem;
+    margin: 2rem 0 1rem;
+    color: #334155;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  th, td {
+    padding: 0.85rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  th { background: #f1f5f9; font-weight: 600; }
+  .sev {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .sev-Critical { background: #fee2e2; color: #991b1b; }
+  .sev-High { background: #ffedd5; color: #9a3412; }
+  .sev-Medium { background: #fef9c3; color: #854d0e; }
+  .sev-Low { background: #dcfce7; color: #166534; }
+  ul { margin-left: 1.5rem; }
+  li { margin-bottom: 0.5rem; }
+  .compliance-list { list-style: none; margin-left: 0; }
+  .compliance-list li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e2e8f0;
+    color: #94a3b8;
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">AIST</div>
+  <div class="meta">
+    Executive Security Summary<br>
+    {{ scan_date }} &mdash; {{ target }}<br>
+    Operator: {{ operator }}
+  </div>
+</div>
+
+<div class="scorecard">
+  <div class="score-label score-{{ overall_color }}">
+    {{ overall_rating }} Risk
+  </div>
+  <div class="score-value score-{{ overall_color }}">
+    {{ "%.1f"|format(overall_score) }} / 10
+  </div>
+  <div class="summary-sentence">{{ summary_sentence }}</div>
+  {% if artifacts_sentence %}
+  <div class="summary-sentence" style="margin-top:0.5rem;">
+    {{ artifacts_sentence }}
+  </div>
+  {% endif %}
+</div>
+
+<h2>Top Findings</h2>
+{% if top_findings %}
+<table>
+  <thead>
+    <tr>
+      <th>Finding</th>
+      <th>Severity</th>
+      <th>Business Impact</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in top_findings %}
+    <tr>
+      <td>{{ f.title }}</td>
+      <td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span></td>
+      <td>{{ f.impact }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No significant findings detected.</p>
+{% endif %}
+
+<h2>Compliance Snapshot</h2>
+<ul class="compliance-list">
+  {% if owasp_violations %}
+  <li><strong>OWASP:</strong> {{ owasp_violations | join(', ') }}</li>
+  {% endif %}
+  {% if eu_articles %}
+  <li><strong>EU AI Act:</strong> {{ eu_articles | join(', ') }}</li>
+  {% endif %}
+  {% if soc2_criteria %}
+  <li><strong>SOC2:</strong> {{ soc2_criteria | join(', ') }}</li>
+  {% endif %}
+  {% if not owasp_violations and not eu_articles and not soc2_criteria %}
+  <li>No compliance framework violations identified.</li>
+  {% endif %}
+</ul>
+
+<h2>Recommended Actions</h2>
+<ul>
+  {% for rec in recommendations %}
+  <li>{{ rec }}</li>
+  {% endfor %}
+</ul>
+
+<div class="footer">
+  Full technical report available separately.
+  Generated by AIST v{{ aist_version }}.
+</div>
+
+</body>
+</html>"""
 
 
 def _build_findings(
@@ -211,6 +585,9 @@ def _build_findings(
             "llm_judge_confidence": evidence.llm_judge_confidence,
             "llm_judge_reasoning": evidence.llm_judge_reasoning,
             "llm_judge_partial": evidence.llm_judge_partial,
+            "resource_validation_note": getattr(
+                evidence, "resource_validation_note", None
+            ),
             "compliance": compliance,
             "generic_guidance": generic,
             "response_hash": evidence.response_hash,
@@ -291,6 +668,165 @@ def _build_summary(findings: list, scan_evidence) -> dict:
     }
 
 
+_ARTIFACT_CATEGORIES = {
+    "api_keys": {
+        "title": "API KEYS DETECTED",
+        "css": "artifact-critical",
+    },
+    "credentials": {
+        "title": "CREDENTIALS",
+        "css": "artifact-critical",
+    },
+    "internal_urls": {
+        "title": "INTERNAL URLS",
+        "css": "artifact-orange",
+    },
+    "ip_addresses": {
+        "title": "IP ADDRESSES",
+        "css": "artifact-orange",
+    },
+    "database_strings": {
+        "title": "DATABASE STRINGS",
+        "css": "artifact-orange",
+    },
+    "endpoints": {
+        "title": "ENDPOINTS",
+        "css": "artifact-orange",
+    },
+    "agent_endpoints": {
+        "title": "AGENT ENDPOINTS",
+        "css": "artifact-orange",
+    },
+    "service_names": {
+        "title": "SERVICES MENTIONED",
+        "css": "artifact-yellow",
+    },
+    "email_addresses": {
+        "title": "EMAIL ADDRESSES",
+        "css": "artifact-yellow",
+    },
+    "other": {
+        "title": "OTHER ARTIFACTS",
+        "css": "artifact-yellow",
+    },
+}
+
+
+def _format_validation_status(
+    value: str,
+    validation_results: dict,
+) -> dict:
+    """Format passive validation status for display."""
+    vr = validation_results.get(value)
+    if not vr:
+        return {
+            "css": "validation-unknown",
+            "text": "? Validation skipped",
+            "critical": False,
+        }
+    if vr.is_accessible:
+        if vr.resource_type == "http_endpoint":
+            return {
+                "css": "validation-ok",
+                "text": (
+                    f"✓ ACCESSIBLE  HTTP {vr.status_code}  "
+                    f"{vr.response_time_ms}ms"
+                ),
+                "note": "Confirmed live endpoint",
+                "critical": False,
+            }
+        if vr.resource_type == "database":
+            return {
+                "css": "validation-ok",
+                "text": (
+                    f"✓ PORT OPEN  {vr.response_time_ms}ms"
+                ),
+                "note": (
+                    "CRITICAL: Live database port confirmed. "
+                    "Passive TCP check only. No data accessed."
+                ),
+                "critical": True,
+            }
+    return {
+        "css": "validation-fail",
+        "text": f"✗ NOT REACHABLE  {vr.error or 'Unknown'}",
+        "critical": False,
+    }
+
+
+def _build_artifacts_summary_sentence(scan_evidence) -> str:
+    """One-line artifact summary for executive report."""
+    artifacts = getattr(
+        scan_evidence, "discovered_artifacts", {}
+    ) or {}
+    internal = len(artifacts.get("internal_urls", []))
+    services = len(artifacts.get("service_names", []))
+    endpoints = len(artifacts.get("endpoints", []))
+    if not internal and not services and not endpoints:
+        return ""
+    parts = []
+    if internal:
+        parts.append(
+            f"{internal} internal URL"
+            f"{'s' if internal != 1 else ''}"
+        )
+    if endpoints:
+        parts.append(
+            f"{endpoints} endpoint"
+            f"{'s' if endpoints != 1 else ''}"
+        )
+    if services:
+        parts.append(
+            f"{services} service name"
+            f"{'s' if services != 1 else ''}"
+        )
+    joined = ", ".join(parts[:-1])
+    if len(parts) > 1:
+        joined = f"{joined} and {parts[-1]}"
+    else:
+        joined = parts[0]
+    return (
+        f"During scanning, {joined} were discovered "
+        f"in agent responses."
+    )
+
+
+def _build_artifact_cards(scan_evidence) -> list:
+    """Build artifact display cards for HTML report."""
+    artifacts = getattr(
+        scan_evidence, "discovered_artifacts", {}
+    ) or {}
+    if not artifacts:
+        return []
+
+    sources = getattr(scan_evidence, "artifact_sources", {})
+    validation_results = getattr(
+        scan_evidence, "validation_results", {}
+    ) or {}
+
+    cards = []
+    for key, meta in _ARTIFACT_CATEGORIES.items():
+        values = artifacts.get(key, [])
+        if not values:
+            continue
+        items = []
+        for value in values:
+            items.append({
+                "value": value,
+                "source": sources.get(value),
+                "validation": _format_validation_status(
+                    value, validation_results
+                ),
+            })
+        cards.append({
+            "title": meta["title"],
+            "css": meta["css"],
+            "count": len(values),
+            "items": items,
+        })
+    return cards
+
+
 def _build_attack_surface(
     recon_report,
     discovery_result,
@@ -327,6 +863,9 @@ def _build_attack_surface(
         "severity_multiplier": getattr(
             discovery_result, "severity_multiplier", 1.0
         ),
+        "discovered_agent_endpoints": getattr(
+            discovery_result, "discovered_agent_endpoints", {}
+        ),
     }
 
 
@@ -337,6 +876,7 @@ def _render_template(
     compliance_summary: dict,
     config,
     scan_evidence,
+    artifact_cards: list = None,
 ) -> str:
     """Render the HTML report template."""
     env = Environment(loader=BaseLoader())
@@ -347,6 +887,7 @@ def _render_template(
         summary=summary,
         attack_surface=attack_surface,
         compliance_summary=compliance_summary,
+        artifact_cards=artifact_cards or [],
         scan_date=datetime.now().strftime(
             "%B %d, %Y at %H:%M UTC"
         ),
@@ -971,6 +1512,81 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     line-height: 1.5;
   }
 
+  .artifacts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .artifact-card {
+    background: #1a1f2e;
+    border-radius: 8px;
+    padding: 1rem;
+    border: 1px solid #2d3748;
+  }
+
+  .artifact-card.artifact-critical {
+    border-color: #ef4444;
+    background: #1f1215;
+  }
+
+  .artifact-card.artifact-orange {
+    border-color: #f97316;
+  }
+
+  .artifact-card.artifact-yellow {
+    border-color: #eab308;
+  }
+
+  .artifact-card-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #94a3b8;
+    margin-bottom: 0.75rem;
+  }
+
+  .artifact-item {
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #2d3748;
+    font-size: 0.85rem;
+    color: #cbd5e1;
+    word-break: break-all;
+  }
+
+  .artifact-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .artifact-source {
+    font-size: 0.75rem;
+    color: #64748b;
+    margin-top: 0.25rem;
+  }
+
+  .validation-ok { color: #4ade80; font-size: 0.8rem; }
+  .validation-fail { color: #f87171; font-size: 0.8rem; }
+  .validation-unknown { color: #94a3b8; font-size: 0.8rem; }
+
+  .validation-note {
+    font-size: 0.75rem;
+    color: #fbbf24;
+    margin-top: 0.25rem;
+  }
+
+  .artifacts-disclaimer {
+    font-size: 0.8rem;
+    color: #64748b;
+    margin-bottom: 1rem;
+    font-style: italic;
+  }
+
   @media print {
     body { background: white; color: black; }
     .finding-body { display: block !important; }
@@ -1225,6 +1841,50 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
   {% endif %}
 
+  <!-- Discovered Artifacts -->
+  <div class="section-title">Discovered Artifacts</div>
+
+  {% if artifact_cards %}
+  <p class="artifacts-disclaimer">
+    Resource validation uses HTTP HEAD requests and TCP port
+    checks only. No data was read, no credentials were used,
+    and no queries were executed. Accessible resources
+    represent confirmed attack surface.
+  </p>
+  <div class="artifacts-grid">
+    {% for card in artifact_cards %}
+    <div class="artifact-card {{ card.css }}">
+      <div class="artifact-card-header">
+        <span>{{ card.title }}</span>
+        <span>{{ card.count }} found</span>
+      </div>
+      {% for item in card.items %}
+      <div class="artifact-item">
+        {% if card.css == 'artifact-critical' %}⚠ {% endif %}
+        {{ item.value }}
+        {% if item.source %}
+        <div class="artifact-source">
+          Found in response to payload {{ item.source }}
+        </div>
+        {% endif %}
+        <div class="{{ item.validation.css }}">
+          {{ item.validation.text }}
+        </div>
+        {% if item.validation.note %}
+        <div class="validation-note">{{ item.validation.note }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color: #64748b; margin-bottom: 2rem;">
+    No infrastructure artifacts discovered in agent responses
+    during this scan.
+  </p>
+  {% endif %}
+
   <!-- Findings -->
   <div class="section-title">
     Findings ({{ summary.total_findings }})
@@ -1299,6 +1959,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             {% for pattern in finding.sensitive_patterns %}
             <span class="tag tag-red">{{ pattern }}</span>
             {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if finding.resource_validation_note %}
+          <div class="finding-section-label">Resource Validation</div>
+          <div class="validation-note" style="margin-bottom: 1rem;">
+            {{ finding.resource_validation_note }}
           </div>
           {% endif %}
 

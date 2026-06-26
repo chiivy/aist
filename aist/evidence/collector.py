@@ -54,10 +54,31 @@ class Evidence:
     llm_judge_confidence: Optional[int] = None
     llm_judge_reasoning: Optional[str] = None
 
+    # Infrastructure artifacts in this response
+    discovered_artifacts: dict = field(default_factory=dict)
+    resource_validation_note: Optional[str] = None
+
     # Metadata
     response_size_kb: float = 0.0
     was_truncated: bool = False
     error: Optional[str] = None
+
+
+@dataclass
+class DiscoveredArtifacts:
+    """
+    Infrastructure artifacts discovered during scanning.
+    """
+    endpoints: list = field(default_factory=list)
+    credentials: list = field(default_factory=list)
+    internal_urls: list = field(default_factory=list)
+    api_keys: list = field(default_factory=list)
+    service_names: list = field(default_factory=list)
+    email_addresses: list = field(default_factory=list)
+    ip_addresses: list = field(default_factory=list)
+    database_strings: list = field(default_factory=list)
+    agent_endpoints: list = field(default_factory=list)
+    other: list = field(default_factory=list)
 
 
 @dataclass
@@ -72,6 +93,9 @@ class ScanEvidence:
     evidence_items: list = field(default_factory=list)
     canary_triggered: bool = False
     errors: list = field(default_factory=list)
+    discovered_artifacts: dict = field(default_factory=dict)
+    artifact_sources: dict = field(default_factory=dict)
+    validation_results: dict = field(default_factory=dict)
 
 
 def is_genuine_finding(evidence: Evidence) -> bool:
@@ -197,7 +221,7 @@ async def collect_evidence(
     Returns:
         Structured Evidence object
     """
-    from aist.evidence.patterns import detect_patterns
+    from aist.evidence.patterns import detect_patterns, extract_artifacts
     from aist.evidence.masking import mask_for_storage
 
     # Step 1: Assemble response handling streaming
@@ -231,6 +255,9 @@ async def collect_evidence(
 
     # Step 4: Detect sensitive patterns
     pattern_results = detect_patterns(response_text)
+
+    # Extract infrastructure artifacts
+    artifacts = extract_artifacts(response_text)
 
     # Step 5: Check canary token leakage
     canary_leaked = False
@@ -284,6 +311,7 @@ async def collect_evidence(
         sensitive_patterns=pattern_results.get("patterns_found", []),
         string_match_success=string_match_success,
         string_matches_found=string_matches,
+        discovered_artifacts=artifacts,
         response_size_kb=response_size_kb,
         was_truncated=assembled.content.endswith(
             "[TRUNCATED BY AIST: RESPONSE EXCEEDED SIZE LIMIT]"

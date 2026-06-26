@@ -123,8 +123,14 @@ async def send_payload(
     *,
     auth_headers: dict = None,
     auth_cookies: dict = None,
+    auth_manager=None,
 ) -> Optional[httpx.Response]:
     """Send a single payload to the target agent."""
+
+    if auth_manager:
+        await auth_manager.refresh_token_if_needed()
+        auth_headers = auth_manager.get_headers()
+        auth_cookies = auth_manager.get_cookies()
 
     headers = {
         "Content-Type": "application/json",
@@ -252,6 +258,7 @@ async def run_payload_with_reproducibility(
     llm_judge_prompt: str,
     config: AISTConfig,
     canary_token: Optional[str] = None,
+    auth_manager=None,
 ) -> list:
     """
     Run a payload multiple times for reproducibility scoring.
@@ -316,6 +323,7 @@ async def run_payload_with_reproducibility(
                 prompt,
                 config,
                 session_id,
+                auth_manager=auth_manager,
             )
 
             if response is None:

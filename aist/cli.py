@@ -80,6 +80,144 @@ def confirm_expose_evidence() -> bool:
     return False
 
 
+def run_interactive_wizard() -> dict:
+    """
+    Walk the user through scan setup interactively.
+
+    Returns:
+        Dictionary of scan parameters, or
+        {"proceed": False} if the user cancels.
+    """
+    console.print(
+        "\n[bold cyan]AIST Interactive Setup Wizard[/bold cyan]\n"
+    )
+
+    target = click.prompt(
+        "Target agent URL",
+        default="http://localhost:5000/chat",
+    )
+
+    auth_type = click.prompt(
+        "Authentication type",
+        type=click.Choice([
+            "none", "bearer", "basic",
+            "apikey", "sso", "cookie",
+        ]),
+        default="none",
+    )
+
+    auth_token = None
+    auth_header = "Authorization"
+    auth_username = None
+    auth_password = None
+    auth_login_url = None
+    auth_tenant_id = None
+    auth_client_id = None
+    auth_cookie_name = "session"
+    auth_cookie_value = None
+
+    if auth_type == "bearer":
+        auth_token = click.prompt(
+            "Bearer token", hide_input=True
+        )
+    elif auth_type == "basic":
+        auth_username = click.prompt("Username")
+        auth_password = click.prompt(
+            "Password", hide_input=True
+        )
+        auth_login_url = click.prompt("Login URL")
+    elif auth_type == "apikey":
+        auth_token = click.prompt(
+            "API key value", hide_input=True
+        )
+        auth_header = click.prompt(
+            "Header name", default="Authorization"
+        )
+    elif auth_type == "sso":
+        auth_tenant_id = click.prompt("Azure AD tenant ID")
+        auth_client_id = click.prompt("Azure AD client ID")
+    elif auth_type == "cookie":
+        auth_cookie_name = click.prompt(
+            "Cookie name", default="session"
+        )
+        auth_cookie_value = click.prompt(
+            "Cookie value", hide_input=True
+        )
+
+    tools = click.prompt(
+        "Tools declared on this agent "
+        "(comma separated, or leave blank)",
+        default="",
+    )
+
+    run_all = click.confirm(
+        "Run all payload categories?",
+        default=True,
+    )
+    if run_all:
+        categories = "all"
+    else:
+        categories = click.prompt(
+            "Categories to run (comma separated, e.g. A,B,G)",
+            default="A,B,C,D",
+        )
+
+    safe_mode = click.confirm(
+        "Enable safe mode? "
+        "(recommended for production systems)",
+        default=False,
+    )
+
+    operator = click.prompt(
+        "Your name or handle",
+        default="unknown",
+    )
+
+    tools_list = [
+        t.strip() for t in tools.split(",") if t.strip()
+    ]
+    categories_display = (
+        "all" if categories == "all"
+        else categories
+    )
+
+    console.print("\n[bold]Scan summary:[/bold]")
+    console.print(f"  Target:       {target}")
+    console.print(f"  Auth:         {auth_type}")
+    console.print(
+        f"  Tools:        "
+        f"{', '.join(tools_list) if tools_list else 'none'}"
+    )
+    console.print(f"  Categories:   {categories_display}")
+    console.print(
+        f"  Safe mode:    {'yes' if safe_mode else 'no'}"
+    )
+    console.print(f"  Operator:     {operator}\n")
+
+    if not click.confirm("Start scan?", default=True):
+        console.print("[yellow]Scan cancelled.[/yellow]")
+        return {"proceed": False}
+
+    return {
+        "proceed": True,
+        "target": target,
+        "tools": tools,
+        "categories": categories,
+        "safe_mode": safe_mode,
+        "operator": operator,
+        "auth_type": auth_type,
+        "auth_token": auth_token,
+        "auth_header": auth_header,
+        "auth_username": auth_username,
+        "auth_password": auth_password,
+        "auth_login_url": auth_login_url,
+        "auth_tenant_id": auth_tenant_id,
+        "auth_client_id": auth_client_id,
+        "auth_cookie_name": auth_cookie_name,
+        "auth_cookie_value": auth_cookie_value,
+    }
+
+
 @click.group()
 def main():
     """
@@ -98,8 +236,9 @@ def main():
 @main.command()
 @click.option(
     "--target", "-t",
-    required=True,
-    help="Target agent endpoint URL"
+    default=None,
+    help="Target agent endpoint URL. "
+         "Omit to launch interactive setup wizard."
 )
 @click.option(
     "--tools", "-T",
@@ -213,6 +352,29 @@ def scan(
     setup_logging(log_level=log_level)
     print_banner()
 
+    auth_cookie_name = None
+    auth_cookie_value = None
+
+    if target is None:
+        wizard = run_interactive_wizard()
+        if not wizard.get("proceed", False):
+            sys.exit(0)
+        target = wizard["target"]
+        tools = wizard["tools"]
+        categories = wizard["categories"]
+        safe_mode = wizard["safe_mode"]
+        operator = wizard["operator"]
+        auth_type = wizard["auth_type"]
+        auth_token = wizard["auth_token"]
+        auth_header = wizard["auth_header"]
+        auth_username = wizard["auth_username"]
+        auth_password = wizard["auth_password"]
+        auth_login_url = wizard["auth_login_url"]
+        auth_tenant_id = wizard["auth_tenant_id"]
+        auth_client_id = wizard["auth_client_id"]
+        auth_cookie_name = wizard["auth_cookie_name"]
+        auth_cookie_value = wizard["auth_cookie_value"]
+
     if expose_evidence:
         expose_evidence = confirm_expose_evidence()
 
@@ -283,6 +445,9 @@ def scan(
     config.auth.login_url = auth_login_url
     config.auth.tenant_id = auth_tenant_id
     config.auth.client_id = auth_client_id
+    if auth_cookie_value:
+        config.auth.cookie_name = auth_cookie_name or "session"
+        config.auth.cookie_value = auth_cookie_value
     config.scan.safe_mode = safe_mode
 
     log.info(

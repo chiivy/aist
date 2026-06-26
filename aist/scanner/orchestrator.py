@@ -29,6 +29,7 @@ from rich.panel import Panel
 
 from aist.logger import get_logger
 from aist.config import AISTConfig
+from aist.auth.manager import AuthManager
 from aist.evidence.collector import ScanEvidence, is_genuine_finding
 from aist.recon.probe import run_recon
 from aist.recon.discovery import run_discovery
@@ -45,10 +46,12 @@ from aist.scanner.multiturn import run_multiturn_scanner
 from aist.scanner.guardrail import run_guardrail_scanner
 from aist.scanner.toolparam import run_toolparam_scanner
 from aist.scanner.output import run_output_scanner
+from aist.scanner.multiagent import run_multiagent_scanner
 from aist.scoring.severity import (
     calculate_severity,
     apply_partial_disclosure_cap,
     get_owasp_reference,
+    SeverityScore,
 )
 from aist.scoring.confidence import (
     calculate_confidence,
@@ -57,6 +60,7 @@ from aist.scoring.confidence import (
 from aist.remediation.contextual import get_contextual_guidance
 from aist.reporting.html import (
     generate_html_report,
+    generate_executive_html_report,
     save_html_report,
 )
 from aist.reporting.json_report import (
@@ -135,6 +139,29 @@ async def run_full_scan(
             "target.[/yellow]\n"
         )
 
+    auth_manager = AuthManager(config.auth)
+    auth_ok = await auth_manager.authenticate()
+    if not auth_ok:
+        console.print(
+            "[bold red]Authentication failed.[/bold red] "
+            "Check your auth configuration and try again.\n"
+        )
+        return {
+            "target": config.target.endpoint,
+            "total_findings": 0,
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "canary_triggered": False,
+            "html_report": "",
+            "executive_html_path": "",
+            "json_report": "",
+            "sarif_report": "",
+            "duration_seconds": 0,
+            "auth_failed": True,
+        }
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -196,7 +223,9 @@ async def run_full_scan(
             token_preview=canary_token[:12] + "...",
         )
 
-        await run_semantic_canary_baseline(config)
+        await run_semantic_canary_baseline(
+            config, auth_manager=auth_manager,
+        )
 
         # Phase 3: Run scanners
         categories = config.scan.categories
@@ -209,6 +238,7 @@ async def run_full_scan(
             ("toolparam", "Tool parameter injection (H)"),
             ("output", "Output manipulation (I)"),
             ("canary", "Canary token check"),
+            ("multiagent", "Multi-agent traversal (MA)"),
         ]
 
         scan_task = progress.add_task(
@@ -263,6 +293,7 @@ async def run_full_scan(
                             config,
                             canary_token,
                             run_cats,
+                            auth_manager=auth_manager,
                         )
                     )
                     all_evidence.extend(evidence)
@@ -276,7 +307,8 @@ async def run_full_scan(
                 ):
                     evidence, results = (
                         await run_indirect_scanner(
-                            config, canary_token
+                            config, canary_token,
+                            auth_manager=auth_manager,
                         )
                     )
                     all_evidence.extend(evidence)
@@ -290,7 +322,8 @@ async def run_full_scan(
                 ):
                     evidence, results = (
                         await run_multiturn_scanner(
-                            config, canary_token
+                            config, canary_token,
+                            auth_manager=auth_manager,
                         )
                     )
                     all_evidence.extend(evidence)
@@ -302,7 +335,8 @@ async def run_full_scan(
                 ):
                     evidence, results = (
                         await run_guardrail_scanner(
-                            config, canary_token
+                            config, canary_token,
+                            auth_manager=auth_manager,
                         )
                     )
                     all_evidence.extend(evidence)
@@ -316,7 +350,8 @@ async def run_full_scan(
                 ):
                     evidence, results = (
                         await run_toolparam_scanner(
-                            config, canary_token
+                            config, canary_token,
+                            auth_manager=auth_manager,
                         )
                     )
                     all_evidence.extend(evidence)
@@ -328,7 +363,8 @@ async def run_full_scan(
                 ):
                     evidence, results = (
                         await run_output_scanner(
-                            config, canary_token
+                            config, canary_token,
+                            auth_manager=auth_manager,
                         )
                     )
                     all_evidence.extend(evidence)
@@ -336,10 +372,30 @@ async def run_full_scan(
 
             elif scanner_name == "canary":
                 evidence, results = await run_canary_check(
-                    config, canary_token
+                    config, canary_token,
+                    auth_manager=auth_manager,
                 )
                 all_evidence.extend(evidence)
                 all_run_results.update(results)
+
+            elif scanner_name == "multiagent":
+                connected_agents = getattr(
+                    discovery_result,
+                    "connected_agents", [],
+                )
+                if connected_agents and (
+                    not config.scan.safe_mode
+                ):
+                    evidence, results = await (
+                        run_multiagent_scanner(
+                            config,
+                            connected_agents,
+                            canary_token,
+                            auth_manager=auth_manager,
+                        )
+                    )
+                    all_evidence.extend(evidence)
+                    all_run_results.update(results)
 
             progress.advance(scan_task)
 
@@ -351,6 +407,72 @@ async def run_full_scan(
         scan_evidence.canary_triggered = any(
             e.canary_leaked for e in all_evidence
         )
+
+        # Aggregate discovered artifacts across evidence
+        all_artifacts = {
+            "endpoints": set(),
+            "internal_urls": set(),
+            "api_keys": set(),
+            "email_addresses": set(),
+            "ip_addresses": set(),
+            "database_strings": set(),
+            "service_names": set(),
+            "agent_endpoints": set(),
+        }
+        artifact_sources = {}
+
+        agent_eps = getattr(
+            discovery_result,
+            "discovered_agent_endpoints", {},
+        )
+        for agent, url in agent_eps.items():
+            all_artifacts["agent_endpoints"].add(
+                f"{agent}: {url}"
+            )
+
+        for evidence in all_evidence:
+            if not is_genuine_finding(evidence):
+                continue
+            for key, values in getattr(
+                evidence, "discovered_artifacts", {}
+            ).items():
+                if key not in all_artifacts:
+                    continue
+                for value in values:
+                    all_artifacts[key].add(value)
+                    artifact_sources[value] = (
+                        evidence.payload_id
+                    )
+
+        scan_evidence.discovered_artifacts = {
+            k: sorted(v)
+            for k, v in all_artifacts.items()
+            if v
+        }
+        scan_evidence.artifact_sources = artifact_sources
+
+        # Passive validation of discovered resources
+        validation_results = {}
+        if scan_evidence.discovered_artifacts:
+            try:
+                from aist.evidence.resource_validator import (
+                    validate_all_artifacts,
+                )
+                log.info(
+                    "running_passive_validation",
+                    note="HEAD requests and TCP port "
+                         "checks only. No data accessed.",
+                )
+                validation_results = await validate_all_artifacts(
+                    scan_evidence.discovered_artifacts,
+                    timeout=5.0,
+                )
+            except Exception as e:
+                log.error(
+                    "passive_validation_failed",
+                    error=str(e),
+                )
+        scan_evidence.validation_results = validation_results
 
         # Phase 4: Scoring
         score_task = progress.add_task(
@@ -421,6 +543,12 @@ async def run_full_scan(
                 credentials_detected=evidence.credentials_detected,
             )
 
+            severity = _apply_validation_severity_boost(
+                evidence,
+                severity,
+                validation_results,
+            )
+
             confidence = calculate_confidence(
                 payload_id=evidence.payload_id,
                 run_results=run_results,
@@ -444,7 +572,7 @@ async def run_full_scan(
         # Phase 5: Reports
         report_task = progress.add_task(
             "[green]Generating reports...",
-            total=3,
+            total=4,
         )
 
         html = generate_html_report(
@@ -456,6 +584,20 @@ async def run_full_scan(
             config=config,
         )
         html_path = save_html_report(html, output_path)
+        progress.advance(report_task)
+
+        executive_path = output_path.replace(
+            ".html", "-executive.html"
+        )
+        executive_html = generate_executive_html_report(
+            scan_evidence=scan_evidence,
+            severity_scores=severity_scores,
+            confidence_scores=confidence_scores,
+            config=config,
+        )
+        executive_html_path = save_html_report(
+            executive_html, executive_path,
+        )
         progress.advance(report_task)
 
         json_output_path = output_path.replace(
@@ -493,6 +635,7 @@ async def run_full_scan(
         genuine_severity_scores,
         confidence_scores,
         html_path,
+        executive_html_path,
         scan_duration,
     )
 
@@ -519,6 +662,7 @@ async def run_full_scan(
             scan_evidence.canary_triggered
         ),
         "html_report": html_path,
+        "executive_html_path": executive_html_path,
         "json_report": json_output_path,
         "sarif_report": sarif_output_path,
         "duration_seconds": scan_duration,
@@ -583,6 +727,7 @@ def _print_scan_summary(
     severity_scores,
     confidence_scores,
     html_path,
+    executive_html_path,
     duration,
 ) -> None:
     """
@@ -618,9 +763,10 @@ def _print_scan_summary(
             f"[yellow]Medium: {medium}[/yellow]  "
             f"[green]Low: {low}[/green]\n\n"
             f"[bold]Reports saved:[/bold]\n"
-            f"  HTML:  {html_path}\n"
-            f"  JSON:  {html_path.replace('.html', '.json')}\n"
-            f"  SARIF: {html_path.replace('.html', '.sarif')}",
+            f"  HTML:       {html_path}\n"
+            f"  Executive:  {executive_html_path}\n"
+            f"  JSON:       {html_path.replace('.html', '.json')}\n"
+            f"  SARIF:      {html_path.replace('.html', '.sarif')}",
             border_style="green" if not critical else "red",
         )
     )
@@ -650,13 +796,14 @@ def _get_severity_base(payload_id: str) -> str:
 
     critical_patterns = ["C3", "E1", "E2", "E3", "E4",
                          "H4", "H6", "I5", "CANARY",
-                         "BL1", "BL2", "BL3"]
+                         "BL1", "BL2", "BL3",
+                         "MA1", "MA2", "MA3", "MA4"]
     high_patterns = ["A1", "A2", "A3", "B1", "B2", "B3",
                      "B5", "B6", "C1", "C2", "C4", "D1",
                      "E5", "F1", "F2", "F3", "G1", "G2",
                      "G5", "G6", "G10", "H1", "H2", "H3",
                      "H5", "H8", "I1", "I2", "I3", "I6",
-                     "BL4", "BL5"]
+                     "BL4", "BL5", "MA5"]
     low_patterns = ["D4", "G9"]
 
     for pattern in critical_patterns:
@@ -672,6 +819,67 @@ def _get_severity_base(payload_id: str) -> str:
             return "low"
 
     return "medium"
+
+
+def _apply_validation_severity_boost(
+    evidence,
+    severity: SeverityScore,
+    validation_results: dict,
+) -> SeverityScore:
+    """
+    Boost severity when passive validation confirms
+    a leaked resource is accessible.
+    """
+    artifacts = getattr(evidence, "discovered_artifacts", {})
+    if not validation_results or not artifacts:
+        return severity
+
+    for db in artifacts.get("database_strings", []):
+        vr = validation_results.get(db)
+        if (
+            vr
+            and getattr(vr, "is_accessible", False)
+            and vr.resource_type == "database"
+        ):
+            evidence.resource_validation_note = (
+                "Database port confirmed open via passive "
+                "validation (TCP check). No data accessed."
+            )
+            breakdown = dict(severity.score_breakdown)
+            breakdown["validation_boost"] = (
+                "database_port_confirmed"
+            )
+            return SeverityScore(
+                payload_id=severity.payload_id,
+                base_score=severity.base_score,
+                pattern_boost=severity.pattern_boost,
+                tool_multiplier=severity.tool_multiplier,
+                final_score=10.0,
+                severity_label="Critical",
+                cvss_vector=severity.cvss_vector,
+                tool_context=severity.tool_context,
+                score_breakdown=breakdown,
+            )
+
+    for url in (
+        artifacts.get("endpoints", [])
+        + artifacts.get("internal_urls", [])
+    ):
+        vr = validation_results.get(url)
+        if vr and getattr(vr, "is_accessible", False):
+            note = (
+                "Resource confirmed accessible via passive "
+                "validation (HEAD/TCP check)"
+            )
+            if severity.severity_label == "High":
+                note = (
+                    "Confirmed accessible -- verify manually. "
+                    + note
+                )
+            evidence.resource_validation_note = note
+            break
+
+    return severity
 
 
 def _recon_to_evidence(

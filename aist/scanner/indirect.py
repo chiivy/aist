@@ -300,6 +300,7 @@ INDIRECT_VECTORS = [
 async def run_indirect_scanner(
     config: AISTConfig,
     canary_token: Optional[str] = None,
+    auth_manager=None,
 ) -> tuple:
     """
     Run indirect injection tests against target agent.
@@ -365,6 +366,7 @@ async def run_indirect_scanner(
                     prompt,
                     config,
                     session_id,
+                    auth_manager=auth_manager,
                 )
 
                 if response is None:

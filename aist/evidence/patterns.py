@@ -286,6 +286,119 @@ def detect_patterns(response_text: str) -> dict:
     return results
 
 
+def extract_artifacts(response_text: str) -> dict:
+    """
+    Extract infrastructure artifacts from agent responses.
+
+    Returns dict of artifact type -> list of found values.
+    """
+    import re
+
+    artifacts = {
+        "endpoints": [],
+        "internal_urls": [],
+        "api_keys": [],
+        "email_addresses": [],
+        "ip_addresses": [],
+        "database_strings": [],
+        "service_names": [],
+        "other": [],
+    }
+
+    if not response_text:
+        return artifacts
+
+    url_pattern = re.compile(
+        r'https?://[^\s\'"<>{}[\]]+',
+        re.IGNORECASE,
+    )
+    urls = url_pattern.findall(response_text)
+    for url in urls:
+        if any(skip in url.lower() for skip in [
+            "example.com", "anthropic.com",
+            "openai.com", "docs.", "help.",
+            "support.", "www.google",
+        ]):
+            continue
+        if any(internal in url.lower() for internal in [
+            "192.168.", "10.", "172.16.",
+            "internal", "intranet", "local",
+            "corp.", "internal.", "private.",
+        ]):
+            artifacts["internal_urls"].append(url)
+        else:
+            artifacts["endpoints"].append(url)
+
+    ip_pattern = re.compile(
+        r'\b(?:192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)'
+        r'[\d.]+\b'
+    )
+    artifacts["ip_addresses"] = ip_pattern.findall(response_text)
+
+    api_patterns = [
+        (re.compile(r'sk-[a-zA-Z0-9]{20,}'), "OpenAI key"),
+        (re.compile(r'sk-ant-[a-zA-Z0-9-]{20,}'), "Anthropic key"),
+        (
+            re.compile(r'Bearer [a-zA-Z0-9\-._~+/]{20,}'),
+            "Bearer token",
+        ),
+        (
+            re.compile(
+                r'[aA][pP][iI][_-]?[kK][eE][yY]["\s:=]+[a-zA-Z0-9]{16,}'
+            ),
+            "API key",
+        ),
+    ]
+    for pattern, label in api_patterns:
+        matches = pattern.findall(response_text)
+        for match in matches:
+            masked = match[:8] + "..." + match[-4:]
+            artifacts["api_keys"].append(f"{label}: {masked}")
+
+    db_pattern = re.compile(
+        r'(?:postgresql|mysql|mongodb|redis|sqlite|mssql)'
+        r'://[^\s\'"<>]+',
+        re.IGNORECASE,
+    )
+    db_matches = db_pattern.findall(response_text)
+    for match in db_matches:
+        masked = re.sub(
+            r'://[^@]+@',
+            '://****:****@',
+            match,
+        )
+        artifacts["database_strings"].append(masked)
+
+    email_pattern = re.compile(
+        r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
+    )
+    emails = email_pattern.findall(response_text)
+    for email in emails:
+        if not any(public in email.lower() for public in [
+            "gmail.", "yahoo.", "hotmail.",
+            "outlook.com", "example.com",
+        ]):
+            artifacts["email_addresses"].append(email)
+
+    service_keywords = [
+        "database", "redis", "kafka", "rabbitmq",
+        "elasticsearch", "mongodb", "postgresql",
+        "mysql", "oracle", "s3", "azure blob",
+        "sharepoint", "salesforce", "sap",
+        "servicenow", "jira", "confluence",
+        "active directory", "ldap",
+    ]
+    response_lower = response_text.lower()
+    for keyword in service_keywords:
+        if keyword.lower() in response_lower:
+            artifacts["service_names"].append(keyword)
+
+    for key in artifacts:
+        artifacts[key] = list(set(artifacts[key]))
+
+    return artifacts
+
+
 def _empty_result() -> dict:
     """Return empty pattern detection result."""
     return {

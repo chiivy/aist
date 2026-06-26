@@ -14,6 +14,7 @@ Supported methods:
 """
 
 import httpx
+import time
 from typing import Optional
 from dataclasses import dataclass, field
 from aist.logger import get_logger
@@ -48,6 +49,7 @@ class AuthManager:
         self.config = config
         self._token: Optional[str] = None
         self._cookies: dict = {}
+        self._token_expires_at: Optional[float] = None
 
     async def authenticate(self) -> bool:
         """
@@ -105,6 +107,84 @@ class AuthManager:
         """
         return self._cookies
 
+    def is_token_expired(self) -> bool:
+        """Check if token is expired or expiring soon."""
+        if not self._token_expires_at:
+            return False
+        return time.time() > (self._token_expires_at - 300)
+
+    async def refresh_token_if_needed(self) -> bool:
+        """Refresh token before expiry if supported."""
+        if not self.is_token_expired():
+            return True
+
+        log.info(
+            "token_refresh_needed",
+            message="Token expiring soon, refreshing...",
+        )
+
+        auth_type = self.config.auth_type.lower()
+        if auth_type == "sso":
+            return await self._refresh_sso_token()
+        elif auth_type == "basic":
+            return await self._login_basic()
+        else:
+            log.warning(
+                "token_refresh_not_supported",
+                auth_type=auth_type,
+                message="Cannot auto-refresh this token type. "
+                        "Re-run scan with fresh token.",
+            )
+            return False
+
+    async def _refresh_sso_token(self) -> bool:
+        """Silently refresh SSO token using cached credentials."""
+        try:
+            import msal
+        except ImportError:
+            log.error(
+                "msal_not_installed",
+                message="Run: pip install msal",
+            )
+            return False
+
+        try:
+            app = msal.PublicClientApplication(
+                client_id=self.config.client_id,
+                authority=(
+                    f"https://login.microsoftonline.com/"
+                    f"{self.config.tenant_id}"
+                ),
+            )
+            accounts = app.get_accounts()
+            if accounts:
+                result = app.acquire_token_silent(
+                    scopes=[
+                        "openid", "profile", "offline_access",
+                    ],
+                    account=accounts[0],
+                )
+                if result and "access_token" in result:
+                    self._token = (
+                        f"Bearer {result['access_token']}"
+                    )
+                    expires_in = result.get("expires_in", 3600)
+                    self._token_expires_at = (
+                        time.time() + expires_in
+                    )
+                    log.info("token_refreshed_silently")
+                    return True
+
+            log.warning(
+                "silent_refresh_failed",
+                message="No cached account found. "
+                        "Re-authenticate with --auth-type sso",
+            )
+            return False
+        except Exception as e:
+            log.error("token_refresh_error", error=str(e))
+            return False
+
     async def _setup_bearer(self) -> bool:
         """Use pre-captured Bearer token."""
         if not self.config.token:
@@ -118,6 +198,7 @@ class AuthManager:
             token = f"Bearer {token}"
 
         self._token = token
+        self._token_expires_at = time.time() + 3600
         log.info("auth_bearer_configured",
             token_preview=token[:20] + "...")
         return True
@@ -200,6 +281,9 @@ class AuthManager:
 
                     if token:
                         self._token = f"Bearer {token}"
+                        self._token_expires_at = (
+                            time.time() + 3600
+                        )
                         log.info(
                             "auth_basic_success",
                             token_preview=(
@@ -289,6 +373,8 @@ class AuthManager:
             self._token = (
                 f"Bearer {result['access_token']}"
             )
+            expires_in = result.get("expires_in", 3600)
+            self._token_expires_at = time.time() + expires_in
             log.info("auth_sso_success",
                 token_preview=self._token[:20] + "...")
             return True

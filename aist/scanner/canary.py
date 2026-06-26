@@ -77,6 +77,7 @@ def get_system_prompt_with_canary(
 async def run_canary_check(
     config: AISTConfig,
     canary_token: str,
+    auth_manager=None,
 ) -> tuple:
     """
     Run canary token checks against target agent.
@@ -173,6 +174,7 @@ async def run_canary_check(
                     client,
                     probe_prompt,
                     config,
+                    auth_manager=auth_manager,
                 )
 
                 if response is None:
@@ -262,6 +264,7 @@ async def run_canary_check(
 
 async def run_semantic_canary_baseline(
     config: AISTConfig,
+    auth_manager=None,
 ) -> dict:
     """
     Run baseline checks for semantic and behavioural
@@ -309,7 +312,8 @@ async def run_semantic_canary_baseline(
     async with httpx.AsyncClient() as client:
         for canary_id, probe in baseline_probes.items():
             response = await send_payload(
-                client, probe, config
+                client, probe, config,
+                auth_manager=auth_manager,
             )
 
             if response is None:

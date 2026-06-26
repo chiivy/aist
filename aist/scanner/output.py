@@ -34,6 +34,7 @@ log = get_logger(__name__)
 async def run_output_scanner(
     config: AISTConfig,
     canary_token: Optional[str] = None,
+    auth_manager=None,
 ) -> tuple:
     """
     Run output manipulation tests against
@@ -98,6 +99,7 @@ async def run_output_scanner(
                 llm_judge_prompt=llm_judge_prompt,
                 config=config,
                 canary_token=canary_token,
+                auth_manager=auth_manager,
             )
         )
 

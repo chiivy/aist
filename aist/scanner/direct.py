@@ -45,6 +45,7 @@ async def run_direct_scanner(
     config: AISTConfig,
     canary_token: Optional[str] = None,
     categories: Optional[list] = None,
+    auth_manager=None,
 ) -> tuple:
     """
     Run direct injection tests against target agent.
@@ -145,6 +146,7 @@ async def run_direct_scanner(
                     llm_judge_prompt=llm_judge_prompt,
                     config=config,
                     canary_token=canary_token,
+                    auth_manager=auth_manager,
                 )
             )
 
