@@ -243,6 +243,46 @@ Documenting limitations supports honest evaluation and research reproducibility:
 7. **Canary dependency** — out-of-band confirmation requires operator setup;
    conversational SSRF indicators alone are weaker evidence.
 
+### Future: Local Semantic Similarity Scoring
+
+Current string matching uses keyword lists which miss paraphrased disclosures.
+The current implementation uses the LLM judge as a semantic screen
+(`run_semantic_screen()` in `collector.py`) which works but costs API tokens
+per payload.
+
+A more efficient alternative would be local semantic similarity using
+sentence-transformers:
+
+```bash
+pip install sentence-transformers
+```
+
+```python
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+```
+
+This would enable:
+
+- Offline semantic matching (no API cost)
+- Faster screening before LLM judge
+- Cosine similarity scoring between response and known disclosure patterns
+- No API dependency for basic detection
+
+**Why not implemented in v1.0:** The `all-MiniLM-L6-v2` model requires ~500MB
+download on first use and PyTorch as a dependency. This is too heavy for a CLI
+tool that should install cleanly with `pip install`.
+
+**Planned for v1.2** as an optional dependency:
+
+```bash
+pip install aist[semantic]
+```
+
+This would download the model on first use and cache it locally for subsequent
+scans.
+
 These constraints are intentional scope boundaries for v1.x and define the
 roadmap for MCP testing, behavioural RAG assessment, and adaptive payloads.
 
