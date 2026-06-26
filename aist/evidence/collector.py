@@ -53,6 +53,7 @@ class Evidence:
     llm_judge_partial: Optional[bool] = None
     llm_judge_confidence: Optional[int] = None
     llm_judge_reasoning: Optional[str] = None
+    disclosure_depth: Optional[str] = None
 
     # Infrastructure artifacts in this response
     discovered_artifacts: dict = field(default_factory=dict)
@@ -96,6 +97,7 @@ class ScanEvidence:
     discovered_artifacts: dict = field(default_factory=dict)
     artifact_sources: dict = field(default_factory=dict)
     validation_results: dict = field(default_factory=dict)
+    infrastructure_findings: list = field(default_factory=list)
 
 
 def is_genuine_finding(evidence: Evidence) -> bool:

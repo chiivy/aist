@@ -36,6 +36,8 @@ class DiscoveryResult:
     connected_agents: list = field(default_factory=list)
     rag_detected: bool = False
     ssrf_potential: bool = False
+    ssrf_response: str = ""
+    connected_agents_response: str = ""
     auth_mechanism: str = "unknown"
     session_type: str = "unknown"
     environment_info: dict = field(default_factory=dict)
@@ -173,6 +175,8 @@ async def run_discovery(
 
                 elif probe["id"] == "D2":
                     agents = _extract_agent_references(response)
+                    if agents:
+                        result.connected_agents_response = response
                     for agent in agents:
                         if agent not in result.connected_agents:
                             result.connected_agents.append(agent)
@@ -219,6 +223,7 @@ async def run_discovery(
                     elif probe["id"] == "D7":
                         if _indicates_ssrf_potential(response):
                             result.ssrf_potential = True
+                            result.ssrf_response = response
                             log.warning(
                                 "ssrf_potential_detected",
                                 probe="D7",
@@ -239,6 +244,7 @@ async def run_discovery(
                             )
                         ):
                             result.ssrf_potential = True
+                            result.ssrf_response = canary_response
                             log.warning(
                                 "ssrf_active_probe_detected",
                                 probe="D7",
@@ -258,7 +264,8 @@ async def run_discovery(
                 )
             )
 
-    # Calculate severity multiplier    result.severity_multiplier = _calculate_multiplier(result)
+    # Calculate severity multiplier
+    result.severity_multiplier = _calculate_multiplier(result)
 
     log.info(
         "discovery_complete",

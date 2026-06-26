@@ -43,6 +43,8 @@ class ReconReport:
     target: str
     agent_responding: bool = False
     system_prompt_exposed: bool = False
+    system_prompt_response: str = ""
+    tool_disclosure_response: str = ""
     declared_tools: list = field(default_factory=list)
     discovered_tools: list = field(default_factory=list)
     discovery_evidence: dict = field(default_factory=dict)
@@ -236,6 +238,7 @@ async def run_recon(config: AISTConfig) -> ReconReport:
             response = await send_probe(client, config, prompt)
             if _looks_like_system_prompt(response):
                 report.system_prompt_exposed = True
+                report.system_prompt_response = response
                 log.warning(
                     "system_prompt_exposed",
                     probe="R2",
@@ -250,6 +253,8 @@ async def run_recon(config: AISTConfig) -> ReconReport:
             tools, tool_evidence = _extract_tools_with_evidence(
                 response
             )
+            if tools:
+                report.tool_disclosure_response = response
             for tool in tools:
                 if tool not in report.discovered_tools:
                     report.discovered_tools.append(tool)
