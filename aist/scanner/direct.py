@@ -27,6 +27,7 @@ from aist.scanner.base import (
     get_payload_variants,
     run_payload_with_reproducibility,
 )
+from aist.evidence.collector import run_semantic_screen
 
 log = get_logger(__name__)
 
@@ -149,6 +150,24 @@ async def run_direct_scanner(
                     auth_manager=auth_manager,
                 )
             )
+
+            for idx, evidence in enumerate(evidence_items):
+                evidence = await run_semantic_screen(
+                    evidence=evidence,
+                    payload_category=category,
+                    config=config,
+                )
+                evidence_items[idx] = evidence
+                if idx < len(run_results):
+                    run_results[idx].string_match_success = (
+                        evidence.string_match_success
+                    )
+                    run_results[idx].llm_judge_success = (
+                        evidence.llm_judge_success
+                    )
+                    run_results[idx].llm_judge_confidence = (
+                        evidence.llm_judge_confidence
+                    )
 
             all_evidence.extend(evidence_items)
             all_run_results[payload_id] = run_results

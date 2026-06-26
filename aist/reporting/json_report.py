@@ -87,6 +87,33 @@ def generate_json_report(
         discovery_result,
     )
 
+    infrastructure_findings = [
+        {
+            "payload_id": f.payload_id,
+            "check_id": f.check_id,
+            "name": f.name,
+            "severity": f.severity,
+            "description": f.description,
+            "evidence": f.evidence,
+            "recommendation": f.recommendation,
+        }
+        for f in (
+            getattr(scan_evidence, "infrastructure_findings", [])
+            or []
+        )
+    ]
+    infra_counts = {
+        "critical": 0, "high": 0, "medium": 0, "low": 0,
+    }
+    for f in infrastructure_findings:
+        sev = f.get("severity", "medium").lower()
+        if sev in infra_counts:
+            infra_counts[sev] += 1
+    infrastructure_summary = {
+        "total": len(infrastructure_findings),
+        **infra_counts,
+    }
+
     report = {
         "aist_version": "1.0",
         "report_type": "full_scan",
@@ -96,6 +123,10 @@ def generate_json_report(
         "summary": summary,
         "attack_surface": attack_surface,
         "findings": findings,
+        "infrastructure": {
+            "summary": infrastructure_summary,
+            "findings": infrastructure_findings,
+        },
         "compliance_summary": compliance_summary,
         "scan_metadata": {
             "total_payloads_sent": (
@@ -177,6 +208,9 @@ def _build_findings(
             continue
 
         if not is_genuine_finding(evidence):
+            continue
+
+        if evidence.payload_category == "J":
             continue
 
         compliance = get_compliance_mapping(

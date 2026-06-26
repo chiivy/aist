@@ -35,6 +35,7 @@ class DiscoveryResult:
     external_endpoints: list = field(default_factory=list)
     connected_agents: list = field(default_factory=list)
     rag_detected: bool = False
+    rag_validation_response: str = ""
     ssrf_potential: bool = False
     ssrf_response: str = ""
     connected_agents_response: str = ""
@@ -184,6 +185,7 @@ async def run_discovery(
                 elif probe["id"] == "D3":
                     if _indicates_rag(response):
                         result.rag_detected = True
+                        result.rag_validation_response = response
                         log.info(
                             "rag_detected",
                             probe="D3",

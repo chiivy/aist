@@ -1,209 +1,218 @@
-# AIST: Agentic Injection Security Tester
+# AIST — Agentic Injection Security Tester
 
-Open source AI agent security testing framework covering prompt injection,
-guardrail bypass, tool parameter injection, and output manipulation.
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![GitHub stars](https://img.shields.io/github/stars/chiivy/aist?style=social)
 
-![Status](https://img.shields.io/badge/status-active%20development-brightgreen)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![OWASP](https://img.shields.io/badge/OWASP-LLM%20Top%2010-red)
+**The open-source security testing tool built specifically for AI agents.**
 
----
-
-## The Problem
-
-AI agents have access to email, files, databases, and APIs. Prompt injection
-sits at number one on both the OWASP LLM Top 10 and the OWASP Agentic AI
-Top 10 because a successful attack does not just produce a bad response.
-It exfiltrates data, sends emails, deletes files, and calls APIs the user
-never authorised.
-
-In April 2026, researchers confirmed that Claude Code, Gemini CLI, and
-GitHub Copilot Agent were all compromised via prompt injection through
-specially crafted content. The attack surface is real, active, and growing
-faster than the tooling to test it.
-
-Most existing tools test LLMs. AIST tests agents, and scores vulnerability
-severity based on what the agent can actually do.
+[Repository](https://github.com/chiivy/aist) · [Canary setup](docs/canary_setup.md) · [Scoring methodology](docs/scoring_methodology.md) · [Threat model](docs/threat_model.md)
 
 ---
 
-## What Makes AIST Different
+## What makes AIST different
 
-| Feature | AIST | Promptmap | Rebuff | Pytector |
-|---------|------|-----------|--------|----------|
-| Tool-aware contextual severity scoring | Yes | No | No | No |
-| Attack surface mapping and discovery | Yes | No | No | No |
-| Agent-to-agent detection | Yes | No | No | No |
-| Guardrail bypass testing | Yes | No | No | No |
-| Tool parameter injection testing | Yes | No | No | No |
-| Output manipulation testing | Yes | No | No | No |
-| Multi-turn attack chain testing | Yes | No | No | No |
-| Second order injection protection | Yes | No | No | No |
-| Canary token validation | Yes | No | Yes | No |
-| Session persistence testing | Yes | No | No | No |
-| Streaming response support | Yes | No | No | No |
-| Environment and OS probing | Yes | No | No | No |
-| Adaptive testing via model fingerprinting | Yes | No | No | No |
-| LLM judge analysis for accurate detection | Yes | No | No | No |
-| Configurable evidence exposure modes | Yes | No | No | No |
-| Local execution, no data sent to third parties | Yes | Yes | No | Yes |
-| MITRE ATLAS mapped findings | Yes | No | No | No |
-| SIEM-ready structured logging | Yes | No | No | No |
-| Published threat model | Yes | No | No | No |
+Most security tools test language models in isolation. AIST tests **AI agents** — systems that send email, read files, query databases, call APIs, and delegate to other agents. The same prompt injection that scores **Low** against a read-only chatbot can score **Critical** against an agent with database and email access.
 
-**Tool-aware scoring** means the same vulnerability scores differently
-depending on what the agent can do. Prompt injection on an agent with
-read-only access is a different risk than the same injection on an agent
-with email, file, and database access. No existing open source tool
-accounts for this.
+AIST quantifies that difference with **tool-aware severity scoring**: findings are weighted by declared and discovered capabilities, attack-surface complexity, and evidence patterns (credentials, canary leaks, system prompt disclosure depth). Every result maps to OWASP LLM Top 10 and MITRE ATLAS references.
 
 ---
 
-## Getting Started
+## What AIST tests
 
-**Minimum setup -- runs a basic scan immediately:**
+| Category | What it tests |
+|----------|---------------|
+| A–F | Direct prompt injection variants (role override, jailbreak, context manipulation, extraction, tool abuse, format attacks) |
+| G | Guardrail bypass including token boundary splitting (G11) |
+| H | Tool parameter injection and SSRF (H4 with canary confirmation) |
+| I | Indirect injection vectors (poisoned documents, tool responses, RAG-oriented probes) |
+| S | Multi-turn sequence manipulation |
+| BL | Business logic violation |
+| J | Infrastructure security configuration (headers, CORS, rate limits, debug paths) |
+| MA | Multi-agent traversal and propagation |
+
+Recon and discovery run before scanners: passive probes map tools, endpoints, connected agents, SSRF potential, and model hints to optimise payload selection.
+
+---
+
+## Quick start
 
 ```bash
-pip install aist
-aist scan --target https://your-agent.com
-```
-
-**Full setup -- maximum detection accuracy:**
-
-```bash
-# Clone the repo
 git clone https://github.com/chiivy/aist
 cd aist
-
-# Copy environment template
 cp .env.example .env
+# Edit .env — see docs/canary_setup.md for optional canary tokens
 
-# Edit .env with your values
-# See docs/canary_setup.md for canary setup options
-
-# Install and scan
 pip install -e .
-aist scan --target https://your-agent.com \
+
+aist scan --target https://your-agent.com/chat \
           --tools email,files,database \
-          --output report.html
+          --operator yourname
 ```
 
-**AIST degrades gracefully based on what you configure:**
+**Minimum scan** (string matching only, no API keys):
 
-| Configuration | Detection Method | Accuracy |
-|--------------|-----------------|----------|
-| Full config (LLM key + canary) | LLM judge + canary trigger | Highest |
+```bash
+pip install -e .
+aist scan --target https://your-agent.com/chat
+```
+
+**Recommended** for accurate detection: configure `ANTHROPIC_API_KEY` in `.env`
+for LLM judge analysis, and canary tokens for out-of-band confirmation on SSRF
+and tool-abuse tests.
+
+| Configuration | Detection method | Accuracy |
+|---------------|------------------|----------|
+| LLM key + canary | Judge + canary trigger | Highest |
 | LLM key only | LLM judge analysis | High |
-| Canary only | Canary trigger + string matching | Medium |
+| Canary only | Canary + string matching | Medium |
 | No config | String matching only | Basic |
 
-See [docs/canary_setup.md](docs/canary_setup.md) for free canary options
-including canarytokens.org.
+---
+
+## Authentication
+
+AIST supports authenticated agents. Configure via `.env` or CLI flags.
+
+**Bearer token** (from Burp or browser devtools):
+
+```bash
+aist scan --target https://app.example.com/api/chat \
+  --auth-type bearer \
+  --auth-token "eyJhbGci..."
+```
+
+**Username / password** (login flow):
+
+```bash
+aist scan --target https://app.example.com/api/chat \
+  --auth-type basic \
+  --auth-username user@company.com \
+  --auth-password "your-password" \
+  --auth-login-url https://app.example.com/api/login
+```
+
+**Azure AD SSO**:
+
+```bash
+aist scan --target https://app.example.com/api/chat \
+  --auth-type sso \
+  --auth-tenant-id your-tenant-id \
+  --auth-client-id your-client-id
+```
+
+**API key** (custom header):
+
+```bash
+aist scan --target https://app.example.com/api/chat \
+  --auth-type apikey \
+  --auth-token your-api-key \
+  --auth-header X-API-Key
+```
+
+**Session cookie**:
+
+```bash
+aist scan --target https://app.example.com/api/chat \
+  --auth-type cookie \
+  --auth-cookie-name session \
+  --auth-cookie-value "abc123..."
+```
 
 ---
 
-## What AIST Tests
+## Safe mode
 
-**Recon and Discovery**
-- Attack surface mapping: endpoints, connected agents, undeclared tools
-- Model fingerprinting for adaptive payload selection
-- Guardrail and safety boundary detection
-- Environment and OS probing
-- Memory and storage architecture detection
-- Streaming response handling
+Use `--safe-mode` (or `AIST_SAFE_MODE=true`) when scanning production or
+production-adjacent systems. Safe mode skips categories that could trigger
+real side effects:
 
-**Injection Testing**
-- Direct prompt injection across six payload categories
-- Indirect injection via poisoned documents and tool responses
-- Multi-turn attack sequences that build context before striking
-- Authentication bypass via role and permission injection
-- Session persistence: does a successful injection survive across sessions
-- Canary token exfiltration detection
-- Second order injection: AIST itself is protected from hostile agent responses
+- **E** — tool abuse (email send, file write, etc.)
+- **H** — tool parameter injection and SSRF probes
+- **S** — multi-turn sequences
+- **INDIRECT** — indirect injection vectors
+- **MA** — multi-agent traversal
 
-**Guardrail Circumvention**
-- Fictional and hypothetical framing bypasses
-- Encoded bypasses via base64 and character substitution
-- Multilingual safety filter evasion
-- Fragmentation attacks across multiple turns
-- Persona injection and jailbreak patterns
-- Token smuggling via streaming
+Recon, guardrail (G), output (I), infrastructure (J), and canary checks still run.
 
-**Tool Parameter Injection**
-- SQL injection via database tools
-- Command injection via shell tools
-- Path traversal via file tools
-- SSRF via web browsing tools including AWS, Azure, and GCP metadata endpoints
-- Environment variable extraction
-
-**Output Manipulation**
-- XML and JSON injection in generated output
-- Code generation attacks
-- Markdown injection with malicious links
-- Downstream prompt injection targeting systems that consume agent output
-
-Each finding is mapped to a MITRE ATLAS technique and scored using a
-contextual severity model combining CVSS with tool-aware risk weighting.
+```bash
+aist scan --target https://your-agent.com/chat --safe-mode
+```
 
 ---
 
-## Output
+## Report output
 
 Every scan produces:
 
-- HTML report with executive summary and traffic light scoring
-- JSON report for machine processing and pipeline integration
-- SARIF output for native display in GitHub and VS Code
-- SIEM-ready structured JSON audit log
+| Format | File | Audience |
+|--------|------|----------|
+| **HTML** | `report.html` | Full technical report with evidence, scoring breakdown, compliance mapping |
+| **HTML Executive** | `report-executive.html` | Plain-English summary with risk gauge for stakeholders |
+| **JSON** | `report.json` | Machine-readable for pipelines and integrations |
+| **SARIF** | `report.sarif` | Native GitHub Security tab integration |
 
-**Three report modes:**
+```bash
+aist scan --target https://your-agent.com/chat \
+          --output reports/my-scan.html \
+          --expose-evidence    # optional: show full unmasked evidence
+```
 
-| Mode | Command | Use case |
-|------|---------|----------|
-| Standard | `aist scan --target ...` | Default. Partial masking of sensitive values |
-| Sensitive | `aist scan --target ... --expose-evidence` | Full values for remediation. Requires confirmation |
-| Executive | `aist scan --target ... --executive` | Traffic light only. Safe for non-technical stakeholders |
-
----
-
-## Privacy and Data Sovereignty
-
-AIST runs entirely on your machine.
-
-Your API keys, target endpoints, and vulnerability findings never leave
-your environment. AIST makes no external calls except to the agent you
-are testing and the LLM API you configure for response analysis.
-
-No accounts required. No data sent to third parties. No telemetry.
-No phone home.
-
-This matters for security teams working with sensitive agents. You have
-full visibility into what is being tested and complete control over
-where findings are stored.
+<!-- Screenshot placeholder -->
+> **[Screenshot of HTML report]** — *Add a screenshot of a completed scan report here.*
 
 ---
 
-## Design
+## Architecture
 
-AIST was designed threat-model first. Before any code was written, a full
-STRIDE analysis was conducted on the tool itself, including identification
-of second order prompt injection as a specific architectural threat where
-security testing tools become attack targets via the responses they receive.
+AIST follows a linear pipeline orchestrated by `scanner/orchestrator.py`:
 
-Read the full threat model: [docs/threat_model.md](docs/threat_model.md)
+**Recon** → **Canary baseline** → **Scanners** → **Artifact aggregation** →
+**Passive validation** → **Scoring** → **Reports**
 
----
+Evidence flows through `is_genuine_finding()` before appearing in any output.
+Recon discoveries become first-class findings (`RECON-D1`, `RECON-E1`,
+`RECON-H4`, `RECON-S1`) with real agent response text captured during probes.
 
-## Roadmap
-
-| Version | Target | Focus |
-|---------|--------|-------|
-| v1.0 | June 2026 | Core scanning engine, HTML and SIEM reporting |
-| v1.5 | Q3 2026 | MCP server testing, RAG pipeline injection |
-| v2.0 | Q4 2026 | Bulk scanning, CI/CD native, executive dashboards |
+See [docs/architecture.md](docs/architecture.md) for a detailed component
+diagram and data-flow description.
 
 ---
 
-## Author
+## Research background
+
+AIST connects operational security testing to the growing body of prompt
+injection research, the [OWASP LLM Top 10](https://owasp.org/www-project-top-10-for-large-language-model-applications/),
+and [MITRE ATLAS](https://atlas.mitre.org/) adversarial ML techniques. It was
+built to support rigorous, reproducible methodology for AI agent security
+assessment — combining structured payloads, LLM-as-judge analysis, canary
+confirmation, and contextual severity scoring in a single open-source toolchain
+suitable for both practitioner workflows and academic evaluation.
+
+Read the scoring model in [docs/scoring_methodology.md](docs/scoring_methodology.md).
+
+---
+
+## Privacy and data sovereignty
+
+AIST runs entirely on your machine. Target endpoints, API keys, and findings
+stay in your environment. The only outbound calls are to the agent under test
+and the LLM provider you configure for judge analysis. No accounts, telemetry,
+or phone-home.
+
+---
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+guidelines on issues, pull requests, and development setup.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
 
 Built by [@chiivy](https://github.com/chiivy)
