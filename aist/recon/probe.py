@@ -143,30 +143,26 @@ async def send_probe(
     Returns:
         Response text from agent (untrusted string)
     """
-    headers = {"Content-Type": "application/json"}
-
-    if config.target.api_key:
-        headers["Authorization"] = f"Bearer {config.target.api_key}"
-
     try:
+        from aist.scanner.base import (
+            build_target_request_body,
+            build_target_request_headers,
+        )
+
         response = await client.post(
             config.target.endpoint,
-            json={"message": prompt},
-            headers=headers,
+            json=build_target_request_body(config, prompt),
+            headers=build_target_request_headers(config),
             timeout=config.scan.scan_timeout_seconds,
         )
         response.raise_for_status()
-        data = response.json()
+        from aist.recon.streaming import collect_response
 
-        # Extract response text
-        # Handles common response formats
-        return (
-            data.get("response") or
-            data.get("message") or
-            data.get("content") or
-            data.get("text") or
-            str(data)
+        assembled = await collect_response(
+            response,
+            response_field=config.target.response_field,
         )
+        return assembled.content
 
     except httpx.TimeoutException:
         log.warning(

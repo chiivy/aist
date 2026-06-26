@@ -7,6 +7,7 @@ here. No credentials anywhere else in the codebase.
 """
 
 import os
+import json as _json
 from dataclasses import dataclass, field
 from typing import Optional
 from dotenv import load_dotenv
@@ -53,6 +54,14 @@ class TargetConfig:
     api_key: Optional[str] = None
     tools: list = field(default_factory=list)
     mode: str = "active"
+    message_field: str = "message"
+    custom_body_fields: dict = field(
+        default_factory=dict
+    )
+    custom_headers: dict = field(
+        default_factory=dict
+    )
+    response_field: str = ""
 
 
 @dataclass
@@ -224,6 +233,28 @@ def load_config(
     config.target.api_key = os.getenv("TARGET_API_KEY")
     config.target.tools = tools or []
     config.target.mode = mode
+
+    config.target.message_field = os.getenv(
+        "AIST_MESSAGE_FIELD", "message"
+    )
+
+    try:
+        config.target.custom_body_fields = _json.loads(
+            os.getenv("AIST_CUSTOM_BODY_FIELDS", "{}")
+        )
+    except _json.JSONDecodeError:
+        config.target.custom_body_fields = {}
+
+    try:
+        config.target.custom_headers = _json.loads(
+            os.getenv("AIST_CUSTOM_HEADERS", "{}")
+        )
+    except _json.JSONDecodeError:
+        config.target.custom_headers = {}
+
+    config.target.response_field = os.getenv(
+        "AIST_RESPONSE_FIELD", ""
+    )
 
     if not config.target.api_key:
         log.info(

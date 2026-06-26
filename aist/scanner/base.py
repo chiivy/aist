@@ -115,6 +115,35 @@ async def jitter(config: AISTConfig) -> None:
     await asyncio.sleep(delay)
 
 
+def build_target_request_body(
+    config: AISTConfig,
+    message: str,
+) -> dict:
+    """Build JSON request body with custom fields and message."""
+    body = dict(config.target.custom_body_fields)
+    body[config.target.message_field] = message
+    return body
+
+
+def build_target_request_headers(
+    config: AISTConfig,
+    session_id: Optional[str] = None,
+    auth_headers: Optional[dict] = None,
+) -> dict:
+    """Build request headers; auth headers override custom headers."""
+    headers = {"Content-Type": "application/json"}
+    headers.update(config.target.custom_headers)
+    if session_id:
+        headers["X-Session-ID"] = session_id
+    if config.target.api_key:
+        headers["Authorization"] = (
+            f"Bearer {config.target.api_key}"
+        )
+    if auth_headers:
+        headers.update(auth_headers)
+    return headers
+
+
 async def send_payload(
     client: httpx.AsyncClient,
     payload: str,
@@ -125,67 +154,24 @@ async def send_payload(
     auth_cookies: dict = None,
     auth_manager=None,
 ) -> Optional[httpx.Response]:
-    """Send a single payload to the target agent."""
+    """
+    Send a single payload to the target agent.
 
+    Handles authentication, custom body fields,
+    custom headers, timeouts, and rate limit backoff.
+    """
     if auth_manager:
         await auth_manager.refresh_token_if_needed()
         auth_headers = auth_manager.get_headers()
         auth_cookies = auth_manager.get_cookies()
 
-    headers = {
-        "Content-Type": "application/json",
-    }
-
-    if session_id:
-        headers["X-Session-ID"] = session_id
-
-    # Attach auth headers if provided
-    if auth_headers:
-        headers.update(auth_headers)
-
+    body = build_target_request_body(config, payload)
+    headers = build_target_request_headers(
+        config,
+        session_id=session_id,
+        auth_headers=auth_headers,
+    )
     cookies = auth_cookies or {}
-
-    try:
-        response = await client.post(
-            config.target.endpoint,
-            json={"message": payload},
-            headers=headers,
-            cookies=cookies,
-            timeout=30,
-        )
-        return response
-
-    except Exception as e:
-        log.warning("send_payload_error",
-            error=str(e))
-        return None
-    """
-    Send a single payload to the target agent.
-
-    Handles authentication, timeouts, and rate
-    limit backoff automatically.
-
-    Args:
-        client:     httpx async client
-        prompt:     Payload prompt to send
-        config:     AIST configuration
-        session_id: Optional session identifier
-                    for session rotation between runs
-
-    Returns:
-        httpx Response or None if request failed
-    """
-    headers = {"Content-Type": "application/json"}
-
-    if config.target.api_key:
-        headers["Authorization"] = (
-            f"Bearer {config.target.api_key}"
-        )
-
-    if session_id:
-        headers["X-Session-ID"] = session_id
-
-    body = {"message": prompt}
 
     max_retries = 3
     retry_count = 0
@@ -196,6 +182,7 @@ async def send_payload(
                 config.target.endpoint,
                 json=body,
                 headers=headers,
+                cookies=cookies,
                 timeout=config.scan.scan_timeout_seconds,
             )
 
@@ -210,12 +197,11 @@ async def send_payload(
                     await asyncio.sleep(wait_time)
                     retry_count += 1
                     continue
-                else:
-                    log.warning(
-                        "rate_limited_no_retry",
-                        status=429,
-                    )
-                    return None
+                log.warning(
+                    "rate_limited_no_retry",
+                    status=429,
+                )
+                return None
 
             return response
 
@@ -237,8 +223,9 @@ async def send_payload(
             return None
 
         except Exception as e:
-            log.error(
-                "request_error",
+            log.warning(
+                "send_payload_error",
+                error=str(e),
                 error_type=type(e).__name__,
             )
             return None

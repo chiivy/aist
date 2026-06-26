@@ -9,6 +9,7 @@ Commands:
 """
 
 import asyncio
+import json as _json
 import re
 import sys
 from datetime import datetime
@@ -144,6 +145,111 @@ def run_interactive_wizard() -> dict:
             "Cookie value", hide_input=True
         )
 
+    message_field = "message"
+    custom_body_fields: dict = {}
+    custom_headers: dict = {}
+    response_field = ""
+
+    does_app_need_custom_format = click.confirm(
+        "\nDoes the target app require a specific "
+        "request format beyond the standard "
+        '{"message": "..."} body?',
+        default=False,
+    )
+
+    if does_app_need_custom_format:
+        console.print(
+            """
+[dim]
+Some enterprise apps require additional fields
+in the request body. For example:
+  {"message": "...", "session_id": "abc",
+   "username": "Ivy", "token": "xyz"}
+
+You can find these by checking the Network tab
+in browser DevTools while using the app.
+Click on a chat request and look at the
+Payload tab to see all required fields.
+[/dim]
+"""
+        )
+
+        message_field = click.prompt(
+            "What is the field name for the message?",
+            default="message",
+            show_default=True,
+        )
+        console.print(
+            "[dim]Common values: message, query, "
+            "input, prompt, content, text[/dim]"
+        )
+
+        extra_fields_json = click.prompt(
+            "\nAny extra body fields? "
+            "Enter as JSON or leave blank",
+            default="",
+        )
+
+        if extra_fields_json.strip():
+            try:
+                custom_body_fields = _json.loads(
+                    extra_fields_json
+                )
+                console.print(
+                    f"[green]✓ Extra fields configured: "
+                    f"{list(custom_body_fields.keys())}[/green]"
+                )
+            except _json.JSONDecodeError:
+                console.print(
+                    "[yellow]Could not parse JSON. "
+                    "Skipping extra fields.[/yellow]"
+                )
+
+        custom_headers_json = click.prompt(
+            "\nAny extra request headers? "
+            "Enter as JSON or leave blank",
+            default="",
+        )
+
+        if custom_headers_json.strip():
+            try:
+                custom_headers = _json.loads(
+                    custom_headers_json
+                )
+                console.print(
+                    f"[green]✓ Custom headers configured: "
+                    f"{list(custom_headers.keys())}[/green]"
+                )
+            except _json.JSONDecodeError:
+                console.print(
+                    "[yellow]Could not parse JSON. "
+                    "Skipping custom headers.[/yellow]"
+                )
+
+        response_field = click.prompt(
+            "What JSON field contains the response? "
+            "(leave blank to auto-detect)",
+            default="",
+        )
+        if response_field.strip():
+            console.print(
+                f"[green]✓ Will read response "
+                f"from '{response_field}' field[/green]"
+            )
+        else:
+            response_field = ""
+
+        streams_response = click.confirm(
+            "Does the app stream its responses? "
+            "(Server-Sent Events / SSE format)",
+            default=False,
+        )
+        if streams_response:
+            console.print(
+                "[dim]AIST will automatically detect "
+                "and parse streamed responses.[/dim]"
+            )
+
     tools = click.prompt(
         "Tools declared on this agent "
         "(comma separated, or leave blank)",
@@ -184,6 +290,26 @@ def run_interactive_wizard() -> dict:
     console.print("\n[bold]Scan summary:[/bold]")
     console.print(f"  Target:       {target}")
     console.print(f"  Auth:         {auth_type}")
+    if message_field != "message":
+        console.print(
+            f"  Message field:  "
+            f"[cyan]{message_field}[/cyan]"
+        )
+    if custom_body_fields:
+        console.print(
+            f"  Extra fields:   "
+            f"[cyan]{list(custom_body_fields.keys())}[/cyan]"
+        )
+    if custom_headers:
+        console.print(
+            f"  Custom headers: "
+            f"[cyan]{list(custom_headers.keys())}[/cyan]"
+        )
+    if response_field:
+        console.print(
+            f"  Response field: "
+            f"[cyan]{response_field}[/cyan]"
+        )
     console.print(
         f"  Tools:        "
         f"{', '.join(tools_list) if tools_list else 'none'}"
@@ -215,6 +341,10 @@ def run_interactive_wizard() -> dict:
         "auth_client_id": auth_client_id,
         "auth_cookie_name": auth_cookie_name,
         "auth_cookie_value": auth_cookie_value,
+        "message_field": message_field,
+        "custom_body_fields": custom_body_fields,
+        "custom_headers": custom_headers,
+        "response_field": response_field,
     }
 
 
@@ -326,6 +456,36 @@ def main():
 @click.option("--safe-mode", is_flag=True, default=False,
     help="Skip payload categories that could trigger "
          "real actions. Use on production systems.")
+@click.option(
+    "--message-field",
+    default=None,
+    help="Request body field name for the message. "
+         "Default: message. Some apps use: "
+         "query, input, prompt, content, text.",
+)
+@click.option(
+    "--body-fields",
+    default=None,
+    help="Additional request body fields as JSON. "
+         "Example: "
+         '{\"session_id\": \"abc\", '
+         '\"username\": \"test\"}',
+)
+@click.option(
+    "--custom-headers",
+    default=None,
+    help="Additional request headers as JSON. "
+         "Example: "
+         '{\"X-Tenant-ID\": \"abc\"}',
+)
+@click.option(
+    "--response-field",
+    default=None,
+    help="JSON field containing agent response. "
+         "Auto-detected if not specified. "
+         "Common values: response, answer, "
+         "message, content, output, text",
+)
 def scan(
     target, tools, output, mode, runs,
     log_level, siem, expose_evidence,
@@ -333,6 +493,8 @@ def scan(
     auth_type, auth_token, auth_header,
     auth_username, auth_password, auth_login_url,
     auth_tenant_id, auth_client_id, safe_mode,
+    message_field, body_fields, custom_headers,
+    response_field,
 ):
     """
     Run a full injection security scan against
@@ -354,6 +516,10 @@ def scan(
 
     auth_cookie_name = None
     auth_cookie_value = None
+    wizard_message_field = None
+    wizard_body_fields = None
+    wizard_custom_headers = None
+    wizard_response_field = None
 
     if target is None:
         wizard = run_interactive_wizard()
@@ -374,6 +540,10 @@ def scan(
         auth_client_id = wizard["auth_client_id"]
         auth_cookie_name = wizard["auth_cookie_name"]
         auth_cookie_value = wizard["auth_cookie_value"]
+        wizard_message_field = wizard.get("message_field")
+        wizard_body_fields = wizard.get("custom_body_fields")
+        wizard_custom_headers = wizard.get("custom_headers")
+        wizard_response_field = wizard.get("response_field")
 
     if expose_evidence:
         expose_evidence = confirm_expose_evidence()
@@ -449,6 +619,44 @@ def scan(
         config.auth.cookie_name = auth_cookie_name or "session"
         config.auth.cookie_value = auth_cookie_value
     config.scan.safe_mode = safe_mode
+
+    if message_field:
+        config.target.message_field = message_field
+    elif wizard_message_field:
+        config.target.message_field = wizard_message_field
+
+    if body_fields:
+        try:
+            config.target.custom_body_fields = (
+                _json.loads(body_fields)
+            )
+        except _json.JSONDecodeError:
+            console.print(
+                "[red]Invalid JSON in --body-fields. "
+                "Use format: "
+                '{\"key\": \"value\"}[/red]'
+            )
+    elif wizard_body_fields:
+        config.target.custom_body_fields = wizard_body_fields
+
+    if custom_headers:
+        try:
+            config.target.custom_headers = (
+                _json.loads(custom_headers)
+            )
+        except _json.JSONDecodeError:
+            console.print(
+                "[red]Invalid JSON in --custom-headers. "
+                "Use format: "
+                '{\"key\": \"value\"}[/red]'
+            )
+    elif wizard_custom_headers:
+        config.target.custom_headers = wizard_custom_headers
+
+    if response_field:
+        config.target.response_field = response_field
+    elif wizard_response_field:
+        config.target.response_field = wizard_response_field
 
     log.info(
         "scan_command_started",

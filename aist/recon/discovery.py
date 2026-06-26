@@ -320,7 +320,10 @@ async def discover_agent_endpoints(
             if response is None:
                 continue
 
-            assembled = await collect_response(response)
+            assembled = await collect_response(
+                response,
+                response_field=config.target.response_field,
+            )
             urls = url_pattern.findall(
                 assembled.content
             )

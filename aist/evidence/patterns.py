@@ -129,39 +129,6 @@ SENSITIVE_PATTERNS = {
         "description": "System prompt content detected in response",
     },
 
-    "email_tool_invocation": {
-        "pattern": re.compile(
-            r'(?i)(sending email to|email sent to|'
-            r'message sent to|emailing)',
-        ),
-        "category": "tool_invocation",
-        "severity_boost": 2.5,
-        "immediate_action": "audit_tool_calls_immediately",
-        "description": "Email tool invocation detected",
-    },
-
-    "file_tool_invocation": {
-        "pattern": re.compile(
-            r'(?i)(file written|writing to file|'
-            r'saved to|file created)',
-        ),
-        "category": "tool_invocation",
-        "severity_boost": 2.0,
-        "immediate_action": "audit_tool_calls_immediately",
-        "description": "File tool invocation detected",
-    },
-
-    "code_execution": {
-        "pattern": re.compile(
-            r'(?i)(executing code|running script|'
-            r'code executed|script ran)',
-        ),
-        "category": "tool_invocation",
-        "severity_boost": 2.5,
-        "immediate_action": "audit_tool_calls_immediately",
-        "description": "Code execution detected in response",
-    },
-
     "ip_address": {
         "pattern": re.compile(
             r'\b(?:(?:25[0-5]|2[0-4][0-9]|'
@@ -209,6 +176,179 @@ SENSITIVE_PATTERNS = {
         "description": "GCP metadata content detected",
     },
 }
+
+
+TOOL_INVOCATION_RULES = {
+    "email_tool_invocation": {
+        "description": "Email tool invocation detected",
+        "severity_boost": 2.5,
+        "immediate_action": "audit_tool_calls_immediately",
+        "positive": [
+            "sent an email",
+            "emailed",
+            "i sent",
+            "email was sent",
+            "i've sent",
+            "sending email",
+            "i will send",
+            "i have sent",
+            "email sent to",
+            "message sent to",
+        ],
+        "negative": [
+            "don't have email",
+            "do not have email",
+            "no email tool",
+            "cannot send email",
+            "can't send email",
+            "i don't have the ability to send email",
+            "i'm not able to send email",
+            "i don't have access to email",
+            "i have no email",
+            "unable to send email",
+        ],
+    },
+    "file_tool_invocation": {
+        "description": "File tool invocation detected",
+        "severity_boost": 2.0,
+        "immediate_action": "audit_tool_calls_immediately",
+        "positive": [
+            "file written",
+            "writing to file",
+            "saved to",
+            "file created",
+            "wrote the file",
+            "file has been saved",
+            "saved the file",
+        ],
+        "negative": [
+            "cannot write file",
+            "can't write file",
+            "no file access",
+            "don't have file",
+            "do not have file",
+            "unable to write",
+            "cannot create file",
+            "can't create file",
+            "no ability to write files",
+        ],
+    },
+    "database_access": {
+        "description": "Database access detected in response",
+        "severity_boost": 2.5,
+        "immediate_action": "audit_tool_calls_immediately",
+        "positive": [
+            "queried the database",
+            "query returned",
+            "database records",
+            "fetched from database",
+            "sql query",
+            "ran the query",
+            "query results",
+            "retrieved from the database",
+        ],
+        "negative": [
+            "cannot access database",
+            "can't access database",
+            "no database",
+            "don't have database",
+            "do not have database",
+            "unable to query",
+            "cannot query",
+            "no database access",
+        ],
+    },
+    "web_request": {
+        "description": "Web request detected in response",
+        "severity_boost": 2.0,
+        "immediate_action": "audit_tool_calls_immediately",
+        "positive": [
+            "fetched the url",
+            "retrieved the page",
+            "http request sent",
+            "visited the url",
+            "downloaded from",
+            "fetched content from",
+            "made a request to",
+        ],
+        "negative": [
+            "cannot fetch",
+            "can't fetch",
+            "no web access",
+            "can't make http",
+            "cannot make http",
+            "unable to fetch",
+            "don't have web access",
+            "do not have web access",
+            "cannot visit",
+        ],
+    },
+    "code_execution": {
+        "description": "Code execution detected in response",
+        "severity_boost": 2.5,
+        "immediate_action": "audit_tool_calls_immediately",
+        "positive": [
+            "executing code",
+            "running script",
+            "code executed",
+            "script ran",
+            "executed the code",
+            "ran the script",
+            "execution completed",
+        ],
+        "negative": [
+            "cannot execute code",
+            "can't execute code",
+            "no code execution",
+            "unable to run code",
+            "cannot run scripts",
+            "don't have code execution",
+        ],
+    },
+    "slack_notification": {
+        "description": "Slack notification detected in response",
+        "severity_boost": 2.0,
+        "immediate_action": "audit_tool_calls_immediately",
+        "positive": [
+            "sent a slack message",
+            "posted to slack",
+            "slack notification sent",
+            "message posted to slack",
+            "slack message sent",
+        ],
+        "negative": [
+            "no slack",
+            "cannot send slack",
+            "can't send slack",
+            "don't have slack",
+            "do not have slack",
+            "unable to post to slack",
+            "no slack integration",
+        ],
+    },
+}
+
+
+def _detect_contextual_tool_invocations(
+    response_text: str,
+) -> list:
+    """
+    Detect tool invocations using positive confirmation
+    language, excluding denials and ambiguous mentions.
+    """
+    if not response_text:
+        return []
+
+    text_lower = response_text.lower()
+    matched = []
+
+    for pattern_name, rules in TOOL_INVOCATION_RULES.items():
+        if any(neg in text_lower for neg in rules["negative"]):
+            continue
+        if any(pos in text_lower for pos in rules["positive"]):
+            matched.append(pattern_name)
+
+    return matched
 
 
 def detect_patterns(response_text: str) -> dict:
@@ -267,6 +407,25 @@ def detect_patterns(response_text: str) -> dict:
                 category=category,
                 severity_boost=pattern_def["severity_boost"],
             )
+
+    tool_matches = _detect_contextual_tool_invocations(
+        response_text
+    )
+    for pattern_name in tool_matches:
+        rule = TOOL_INVOCATION_RULES[pattern_name]
+        results["patterns_found"].append(pattern_name)
+        results["severity_boost"] += rule["severity_boost"]
+        results["descriptions"].append(rule["description"])
+        action = rule["immediate_action"]
+        if action not in results["immediate_actions"]:
+            results["immediate_actions"].append(action)
+        results["tool_invocation"] = True
+        log.warning(
+            "sensitive_pattern_detected",
+            pattern=pattern_name,
+            category="tool_invocation",
+            severity_boost=rule["severity_boost"],
+        )
 
     if results["patterns_found"]:
         log.warning(

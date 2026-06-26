@@ -321,7 +321,10 @@ async def run_semantic_canary_baseline(
                 continue
 
             from aist.recon.streaming import collect_response
-            assembled = await collect_response(response)
+            assembled = await collect_response(
+                response,
+                response_field=config.target.response_field,
+            )
             baseline[canary_id] = assembled.content
 
             log.info(
