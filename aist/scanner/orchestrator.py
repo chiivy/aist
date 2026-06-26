@@ -48,6 +48,12 @@ from aist.scanner.toolparam import run_toolparam_scanner
 from aist.scanner.output import run_output_scanner
 from aist.scanner.infrastructure import run_infrastructure_scanner
 from aist.scanner.multiagent import run_multiagent_scanner
+from aist.scanner.payload_generator import (
+    generate_context_payloads,
+)
+from aist.scanner.generated_scanner import (
+    run_generated_scanner,
+)
 from aist.scoring.severity import (
     calculate_severity,
     calculate_disclosure_depth,
@@ -223,6 +229,27 @@ async def run_full_scan(
             config,
         )
 
+        generation_result = await generate_context_payloads(
+            config=config,
+            recon_report=recon_report,
+            discovery_result=discovery_result,
+        )
+        generated_payloads = generation_result.payloads
+        scan_evidence.generated_payload_count = len(
+            generated_payloads
+        )
+        scan_evidence.generated_agent_context = (
+            generation_result.agent_context or None
+        )
+
+        if generated_payloads:
+            console.print(
+                f"[cyan]Context-aware probes:[/cyan] "
+                f"{len(generated_payloads)} questions generated "
+                f"for "
+                f"{generation_result.agent_context or 'target agent'}"
+            )
+
         # Phase 2: Canary token
         canary_token = generate_canary_token()
         log.info(
@@ -244,6 +271,7 @@ async def run_full_scan(
 
         scanner_tasks = [
             ("direct", "Direct injection (A-F)"),
+            ("generated", "Context-aware probes (GEN)"),
             ("indirect", "Indirect injection"),
             ("multiturn", "Multi-turn sequences"),
             ("guardrail", "Guardrail bypass (G)"),
@@ -307,6 +335,19 @@ async def run_full_scan(
                             config,
                             canary_token,
                             run_cats,
+                            auth_manager=auth_manager,
+                        )
+                    )
+                    all_evidence.extend(evidence)
+                    all_run_results.update(results)
+
+            elif scanner_name == "generated":
+                if generated_payloads:
+                    evidence, results = await (
+                        run_generated_scanner(
+                            config,
+                            generated_payloads,
+                            canary_token,
                             auth_manager=auth_manager,
                         )
                     )
@@ -561,7 +602,10 @@ async def run_full_scan(
                 ]
             else:
                 payload_severity_base = _get_severity_base(
-                    evidence.payload_id
+                    evidence.payload_id,
+                    gen_sensitivity=getattr(
+                        evidence, "gen_sensitivity", None
+                    ),
                 )
 
             severity = calculate_severity(
@@ -999,7 +1043,10 @@ def _print_scan_summary(
         )
 
 
-def _get_severity_base(payload_id: str) -> str:
+def _get_severity_base(
+    payload_id: str,
+    gen_sensitivity: Optional[str] = None,
+) -> str:
     """
     Get base severity for a payload from its ID.
 
@@ -1010,6 +1057,11 @@ def _get_severity_base(payload_id: str) -> str:
 
     Falls back to medium if pattern not recognised.
     """
+    if payload_id.startswith("GEN-"):
+        if gen_sensitivity in ("scope", "cross_boundary"):
+            return "high"
+        return "medium"
+
     # Recon findings: explicit mapping, checked first
     if payload_id in RECON_SEVERITY:
         return RECON_SEVERITY[payload_id]

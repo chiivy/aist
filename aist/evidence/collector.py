@@ -56,6 +56,10 @@ class Evidence:
     llm_judge_reasoning: Optional[str] = None
     disclosure_depth: Optional[str] = None
 
+    # Context-generated payload metadata
+    gen_rationale: Optional[str] = None
+    gen_sensitivity: Optional[str] = None
+
     # Infrastructure artifacts in this response
     discovered_artifacts: dict = field(default_factory=dict)
     resource_validation_note: Optional[str] = None
@@ -100,6 +104,8 @@ class ScanEvidence:
     validation_results: dict = field(default_factory=dict)
     infrastructure_findings: list = field(default_factory=list)
     infra_severity_scores: list = field(default_factory=list)
+    generated_payload_count: int = 0
+    generated_agent_context: Optional[str] = None
 
 
 def is_genuine_finding(evidence: Evidence) -> bool:
@@ -284,7 +290,11 @@ async def collect_evidence(
 
     # Step 5: Check canary token leakage
     canary_leaked = False
-    if canary_token and canary_token in response_text:
+    if (
+        canary_token
+        and canary_token in response_text
+        and canary_token not in prompt_sent
+    ):
         canary_leaked = True
         log.warning(
             "canary_token_leaked",

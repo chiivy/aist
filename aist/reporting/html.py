@@ -797,6 +797,15 @@ def _build_findings(
                     "Semantic disclosure detected:"
                 )
             ),
+            "context_generated": (
+                evidence.payload_category == "GEN"
+            ),
+            "gen_rationale": getattr(
+                evidence, "gen_rationale", None
+            ),
+            "gen_sensitivity": getattr(
+                evidence, "gen_sensitivity", None
+            ),
             "resource_validation_note": getattr(
                 evidence, "resource_validation_note", None
             ),
@@ -1162,6 +1171,12 @@ def _render_template(
         report_hash="REPORT_HASH_PLACEHOLDER",
         operator=config.scan.operator,
         organisation=config.scan.organisation,
+        generated_payload_count=getattr(
+            scan_evidence, "generated_payload_count", 0
+        ),
+        generated_agent_context=getattr(
+            scan_evidence, "generated_agent_context", None
+        ),
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -1759,6 +1774,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     margin-left: 0.5rem;
   }
 
+  .context-generated-badge {
+    background: #1e1b4b;
+    color: #a5b4fc;
+    border: 1px solid #6366f1;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
+  }
+
+  .context-generated-note {
+    background: #1e1b4b;
+    border: 1px solid #4338ca;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: #c7d2fe;
+  }
+
+  .context-generated-meta {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+  }
+
+  .findings-gen-note {
+    color: #94a3b8;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+  }
+
   .write-action-confirmed-badge {
     background: #450a0a;
     color: #fca5a5;
@@ -2313,6 +2361,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     Findings ({{ summary.total_findings }})
   </div>
 
+  {% if generated_payload_count > 0 %}
+  <p class="findings-gen-note">
+    Includes {{ generated_payload_count }} context-aware probe
+    {{ "s" if generated_payload_count != 1 else "" }}
+    generated based on this agent's specific capabilities
+    {% if generated_agent_context %}
+    ({{ generated_agent_context }})
+    {% endif %}
+  </p>
+  {% endif %}
+
   <div class="findings-section">
     {% if findings %}
       {% for finding in findings %}
@@ -2337,6 +2396,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 Connected Agents Disclosed
               {% elif finding.canary_leaked %}
                 Canary Token Leaked
+              {% elif finding.context_generated %}
+                Context-Aware Disclosure
               {% elif finding.credentials_detected %}
                 Credential Exposure
               {% elif finding.tool_invocation_detected %}
@@ -2361,6 +2422,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             {% if finding.semantic_detection %}
             <span class="semantic-detection-badge">
               Semantic Detection
+            </span>
+            {% endif %}
+            {% if finding.context_generated %}
+            <span class="context-generated-badge">
+              CONTEXT-GENERATED
             </span>
             {% endif %}
             {% if finding.write_action_confirmed %}
@@ -2389,6 +2455,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div class="finding-body" id="body-{{ finding.payload_id }}">
           <div class="finding-divider"></div>
+
+          {% if finding.context_generated %}
+          <div class="context-generated-note">
+            This finding came from a dynamically generated
+            context-aware probe, not a static payload library entry.
+          </div>
+          {% if finding.gen_rationale %}
+          <div class="finding-section-label">Test Objective</div>
+          <div class="context-generated-meta">
+            {{ finding.gen_rationale }}
+          </div>
+          {% endif %}
+          {% if finding.gen_sensitivity %}
+          <div class="finding-section-label">Vulnerability Type</div>
+          <div class="context-generated-meta">
+            {{ finding.gen_sensitivity | replace('_', ' ') | title }}
+          </div>
+          {% endif %}
+          {% endif %}
 
           <!-- Sensitive patterns -->
           {% if finding.sensitive_patterns %}
