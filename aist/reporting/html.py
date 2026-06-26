@@ -778,6 +778,7 @@ def _build_findings(
             "pii_detected": evidence.pii_detected,
             "system_prompt_detected": evidence.system_prompt_detected,
             "tool_invocation_detected": evidence.tool_invocation_detected,
+            "write_action_confirmed": evidence.write_action_confirmed,
             "sensitive_patterns": evidence.sensitive_patterns,
             "prompt_sent": mask_for_report(
                 evidence.prompt_sent, expose
@@ -1758,6 +1759,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     margin-left: 0.5rem;
   }
 
+  .write-action-confirmed-badge {
+    background: #450a0a;
+    color: #fca5a5;
+    border: 1px solid #dc2626;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
+  }
+
+  .write-action-confirmed-note {
+    background: #450a0a;
+    border: 1px solid #dc2626;
+    border-left: 4px solid #ef4444;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    color: #fecaca;
+    font-size: 0.85rem;
+  }
+
   .canary-callback-notice {
     background: #0f172a;
     border: 1px solid #334155;
@@ -2258,7 +2281,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <span>{{ card.title }}</span>
         <span>{{ card.count }} found</span>
       </div>
-      {% for item in card.items %}
+      {% for item in card['items'] %}
       <div class="artifact-item">
         {% if card.css == 'artifact-critical' %}⚠ {% endif %}
         {{ item.value }}
@@ -2340,6 +2363,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
               Semantic Detection
             </span>
             {% endif %}
+            {% if finding.write_action_confirmed %}
+            <span class="write-action-confirmed-badge">
+              Action Confirmed
+            </span>
+            {% endif %}
           </div>
 
           <div class="finding-scores">
@@ -2376,6 +2404,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="finding-section-label">Resource Validation</div>
           <div class="validation-note" style="margin-bottom: 1rem;">
             {{ finding.resource_validation_note }}
+          </div>
+          {% endif %}
+
+          {% if finding.write_action_confirmed %}
+          <div class="write-action-confirmed-note">
+            This injection resulted in a confirmed write action
+            in a backend system.
           </div>
           {% endif %}
 

@@ -89,6 +89,7 @@ def calculate_severity(
     discovery_multiplier: float = 1.0,
     canary_leaked: bool = False,
     credentials_detected: bool = False,
+    write_action_confirmed: bool = False,
 ) -> SeverityScore:
     """
     Calculate contextual severity score for a finding.
@@ -102,6 +103,7 @@ def calculate_severity(
         discovery_multiplier:  Multiplier from attack surface discovery
         canary_leaked:         Whether canary token was leaked
         credentials_detected:  Whether credentials appeared in response
+        write_action_confirmed: Whether a backend write action was confirmed
 
     Returns:
         SeverityScore with full breakdown
@@ -111,6 +113,15 @@ def calculate_severity(
         payload_severity_base.lower(),
         BASE_SCORES["medium"]
     )
+
+    # Confirmed write action is always critical
+    if write_action_confirmed:
+        base_score = max(base_score, BASE_SCORES["critical"])
+        log.warning(
+            "write_action_confirmed_severity_override",
+            payload_id=payload_id,
+            new_base=base_score,
+        )
 
     # Canary leak is always critical regardless of base
     if canary_leaked:
@@ -175,6 +186,7 @@ def calculate_severity(
         "discovery_addition": capped_discovery_addition,
         "final_score": final_score,
         "canary_leaked": canary_leaked,
+        "write_action_confirmed": write_action_confirmed,
         "tools_contributing": relevant_tools,
     }
 

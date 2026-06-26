@@ -578,6 +578,9 @@ async def run_full_scan(
                 credentials_detected=(
                     evidence.credentials_detected
                 ),
+                write_action_confirmed=(
+                    evidence.write_action_confirmed
+                ),
             )
 
             severity = apply_partial_disclosure_cap(
@@ -1011,7 +1014,10 @@ def _get_severity_base(payload_id: str) -> str:
     if payload_id in RECON_SEVERITY:
         return RECON_SEVERITY[payload_id]
 
-    critical_patterns = ["C3", "E1", "E2", "E3", "E4",
+    if payload_id.startswith("V-DATA"):
+        return "high"
+
+    critical_patterns = ["C3", "E1", "E2", "E3", "E4", "E6",
                          "H4", "H6", "I5", "CANARY",
                          "BL1", "BL2", "BL3",
                          "MA1", "MA2", "MA3", "MA4",

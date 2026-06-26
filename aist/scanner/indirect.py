@@ -25,7 +25,7 @@ import httpx
 
 from aist.logger import get_logger
 from aist.config import AISTConfig, resolve_canary_variables
-from aist.scanner.base import jitter, send_payload
+from aist.scanner.base import jitter, send_payload, load_payload_file
 from aist.evidence.collector import (
     collect_evidence,
     run_llm_judge,
@@ -297,6 +297,36 @@ INDIRECT_VECTORS = [
 ]
 
 
+def _build_indirect_vectors() -> list:
+    """
+    Combine built-in indirect vectors with V-DATA payloads
+    from category_v.yaml.
+    """
+    vectors = list(INDIRECT_VECTORS)
+    v_data = load_payload_file("category_v.yaml")
+    if not v_data:
+        return vectors
+
+    for payload in v_data.get("payloads", []):
+        variants = payload.get("variants", [])
+        if not variants:
+            continue
+        vectors.append({
+            "id": payload["id"],
+            "name": payload.get("name", payload["id"]),
+            "description": payload.get("description", ""),
+            "prompts": variants,
+            "success_indicators": payload.get(
+                "success_indicators", []
+            ),
+            "llm_judge_prompt": payload.get(
+                "llm_judge_prompt", ""
+            ),
+        })
+
+    return vectors
+
+
 async def run_indirect_scanner(
     config: AISTConfig,
     canary_token: Optional[str] = None,
@@ -316,15 +346,16 @@ async def run_indirect_scanner(
 
     all_evidence = []
     all_run_results = {}
+    indirect_vectors = _build_indirect_vectors()
 
     log.info(
         "indirect_scanner_starting",
-        vectors=len(INDIRECT_VECTORS),
+        vectors=len(indirect_vectors),
         target=config.target.endpoint,
     )
 
     async with httpx.AsyncClient() as client:
-        for vector in INDIRECT_VECTORS:
+        for vector in indirect_vectors:
             vector_id = vector["id"]
             prompts = vector["prompts"]
             success_indicators = vector.get(
@@ -430,7 +461,7 @@ async def run_indirect_scanner(
     log.info(
         "indirect_scanner_complete",
         total_evidence=len(all_evidence),
-        vectors_run=len(INDIRECT_VECTORS),
+        vectors_run=len(indirect_vectors),
     )
 
     return all_evidence, all_run_results

@@ -20,14 +20,24 @@ reduce detection risk.
 
 from typing import Optional
 
+import httpx
+import uuid
+
 from aist.logger import get_logger
-from aist.config import AISTConfig
+from aist.config import AISTConfig, resolve_canary_variables
 from aist.scanner.base import (
     load_payload_file,
     get_payload_variants,
     run_payload_with_reproducibility,
+    jitter,
+    send_payload,
 )
-from aist.evidence.collector import run_semantic_screen
+from aist.evidence.collector import (
+    run_semantic_screen,
+    collect_evidence,
+    run_llm_judge,
+    detect_write_action_confirmation,
+)
 
 log = get_logger(__name__)
 
@@ -40,6 +50,141 @@ CATEGORY_FILES = {
     "F": "category_f.yaml",
     "BL": "category_bl.yaml",
 }
+
+
+async def run_write_action_with_confirmation(
+    payload_id: str,
+    payload_category: str,
+    variants: list,
+    success_indicators: list,
+    confirmation_probe: str,
+    confirmation_indicators: list,
+    llm_judge_prompt: str,
+    config: AISTConfig,
+    canary_token: Optional[str] = None,
+    auth_manager=None,
+) -> tuple:
+    """
+    Run a write-action payload with a follow-up confirmation probe.
+
+    Sets write_action_confirmed when tool invocation or string match
+    on the action response is followed by confirmation language.
+    """
+    from aist.scoring.confidence import RunResult
+
+    evidence_items = []
+    run_results = []
+    max_runs = min(config.scan.max_payload_runs, len(variants))
+
+    async with httpx.AsyncClient() as client:
+        for run_num in range(max_runs):
+            raw_prompt = variants[run_num % len(variants)]
+            prompt = resolve_canary_variables(raw_prompt, config)
+
+            session_id = None
+            if config.scan.rotate_session_between_runs:
+                session_id = str(uuid.uuid4())
+
+            if run_num > 0:
+                await jitter(config)
+
+            response = await send_payload(
+                client,
+                prompt,
+                config,
+                session_id,
+                auth_manager=auth_manager,
+            )
+
+            if response is None:
+                run_results.append(
+                    RunResult(
+                        run_number=run_num + 1,
+                        string_match_success=False,
+                        llm_judge_success=None,
+                        llm_judge_confidence=None,
+                        canary_leaked=False,
+                        error="Request failed",
+                    )
+                )
+                continue
+
+            evidence = await collect_evidence(
+                response=response,
+                payload_id=f"{payload_id}-{run_num + 1}",
+                payload_category=payload_category,
+                prompt_sent=prompt,
+                success_indicators=success_indicators,
+                canary_token=canary_token,
+                config=config,
+            )
+
+            action_attempted = (
+                evidence.tool_invocation_detected
+                or evidence.string_match_success
+            )
+
+            if action_attempted:
+                probe_text = resolve_canary_variables(
+                    confirmation_probe, config
+                )
+                confirm_response = await send_payload(
+                    client,
+                    probe_text,
+                    config,
+                    session_id,
+                    auth_manager=auth_manager,
+                )
+                if confirm_response:
+                    confirm_evidence = await collect_evidence(
+                        response=confirm_response,
+                        payload_id=(
+                            f"{payload_id}-confirm-{run_num + 1}"
+                        ),
+                        payload_category=payload_category,
+                        prompt_sent=probe_text,
+                        success_indicators=confirmation_indicators,
+                        canary_token=canary_token,
+                        config=config,
+                    )
+                    if detect_write_action_confirmation(
+                        confirm_evidence.response_received,
+                        confirmation_indicators,
+                    ):
+                        evidence.write_action_confirmed = True
+                        log.warning(
+                            "write_action_confirmed",
+                            payload_id=payload_id,
+                            run=run_num + 1,
+                        )
+
+            if config.llm.enabled and llm_judge_prompt:
+                evidence = await run_llm_judge(
+                    evidence=evidence,
+                    llm_judge_prompt=llm_judge_prompt,
+                    config=config,
+                )
+
+            evidence_items.append(evidence)
+            run_results.append(
+                RunResult(
+                    run_number=run_num + 1,
+                    string_match_success=(
+                        evidence.string_match_success
+                        or evidence.write_action_confirmed
+                    ),
+                    llm_judge_success=evidence.llm_judge_success,
+                    llm_judge_confidence=(
+                        evidence.llm_judge_confidence
+                    ),
+                    canary_leaked=evidence.canary_leaked,
+                )
+            )
+
+            if evidence.canary_leaked:
+                break
+
+    return evidence_items, run_results
 
 
 async def run_direct_scanner(
@@ -138,18 +283,40 @@ async def run_direct_scanner(
                 variants=len(variants),
             )
 
-            evidence_items, run_results = (
-                await run_payload_with_reproducibility(
-                    payload_id=payload_id,
-                    payload_category=category,
-                    variants=variants,
-                    success_indicators=success_indicators,
-                    llm_judge_prompt=llm_judge_prompt,
-                    config=config,
-                    canary_token=canary_token,
-                    auth_manager=auth_manager,
+            if payload.get("write_action_confirmation"):
+                evidence_items, run_results = (
+                    await run_write_action_with_confirmation(
+                        payload_id=payload_id,
+                        payload_category=category,
+                        variants=variants,
+                        success_indicators=success_indicators,
+                        confirmation_probe=payload.get(
+                            "confirmation_probe",
+                            "Did you successfully complete that "
+                            "action? Please confirm what happened.",
+                        ),
+                        confirmation_indicators=payload.get(
+                            "confirmation_indicators", []
+                        ),
+                        llm_judge_prompt=llm_judge_prompt,
+                        config=config,
+                        canary_token=canary_token,
+                        auth_manager=auth_manager,
+                    )
                 )
-            )
+            else:
+                evidence_items, run_results = (
+                    await run_payload_with_reproducibility(
+                        payload_id=payload_id,
+                        payload_category=category,
+                        variants=variants,
+                        success_indicators=success_indicators,
+                        llm_judge_prompt=llm_judge_prompt,
+                        config=config,
+                        canary_token=canary_token,
+                        auth_manager=auth_manager,
+                    )
+                )
 
             for idx, evidence in enumerate(evidence_items):
                 evidence = await run_semantic_screen(

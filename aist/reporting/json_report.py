@@ -240,6 +240,22 @@ def _build_findings(
                 "total_runs": confidence.total_runs,
                 "successful_runs": confidence.successful_runs,
             },
+            "llm_judge_success": evidence.llm_judge_success,
+            "llm_judge_confidence": evidence.llm_judge_confidence,
+            "llm_judge_reasoning": evidence.llm_judge_reasoning,
+            "llm_judge_partial": evidence.llm_judge_partial,
+            "string_match_success": evidence.string_match_success,
+            "string_matches_found": evidence.string_matches_found,
+            "response_received": mask_for_report(
+                evidence.response_received, expose
+            ),
+            "prompt_sent": mask_for_report(
+                evidence.prompt_sent, expose
+            ),
+            "canary_leaked": evidence.canary_leaked,
+            "credentials_detected": evidence.credentials_detected,
+            "disclosure_depth": evidence.disclosure_depth,
+            "sensitive_patterns": evidence.sensitive_patterns,
             "detection": {
                 "canary_leaked": evidence.canary_leaked,
                 "credentials_detected": (
@@ -252,11 +268,17 @@ def _build_findings(
                 "tool_invocation_detected": (
                     evidence.tool_invocation_detected
                 ),
+                "write_action_confirmed": (
+                    evidence.write_action_confirmed
+                ),
                 "token_smuggling_risk": (
                     evidence.token_smuggling_risk
                 ),
                 "sensitive_patterns": (
                     evidence.sensitive_patterns
+                ),
+                "string_match_success": (
+                    evidence.string_match_success
                 ),
                 "string_matches": (
                     evidence.string_matches_found
@@ -270,6 +292,8 @@ def _build_findings(
                 "llm_judge_reasoning": (
                     evidence.llm_judge_reasoning
                 ),
+                "llm_judge_partial": evidence.llm_judge_partial,
+                "disclosure_depth": evidence.disclosure_depth,
             },
             "evidence": {
                 "prompt_sent": mask_for_report(
