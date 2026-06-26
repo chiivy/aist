@@ -210,6 +210,7 @@ def _build_findings(
             "llm_judge_success": evidence.llm_judge_success,
             "llm_judge_confidence": evidence.llm_judge_confidence,
             "llm_judge_reasoning": evidence.llm_judge_reasoning,
+            "llm_judge_partial": evidence.llm_judge_partial,
             "compliance": compliance,
             "generic_guidance": generic,
             "response_hash": evidence.response_hash,
@@ -305,6 +306,9 @@ def _build_attack_surface(
         "discovered_tools": getattr(
             discovery_result, "discovered_tools",
             recon_report.discovered_tools
+        ),
+        "discovery_evidence": getattr(
+            recon_report, "discovery_evidence", {}
         ),
         "has_memory": recon_report.has_memory,
         "system_prompt_exposed": recon_report.system_prompt_exposed,
@@ -917,6 +921,56 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     font-weight: 600;
   }
 
+  .partial-disclosure-badge {
+    background: #422006;
+    color: #fdba74;
+    border: 1px solid #f97316;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
+  }
+
+  .tool-evidence-list {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .tool-evidence-item details {
+    cursor: pointer;
+  }
+
+  .tool-evidence-item summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .tool-evidence-item summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .tool-evidence-why {
+    color: #94a3b8;
+    font-size: 0.75rem;
+  }
+
+  .discovery-excerpt {
+    margin: 0.5rem 0 0 0;
+    padding: 0.75rem 1rem;
+    background: #1a1f2e;
+    border-left: 3px solid #f97316;
+    border-radius: 4px;
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    font-style: italic;
+    line-height: 1.5;
+  }
+
   @media print {
     body { background: white; color: black; }
     .finding-body { display: block !important; }
@@ -1077,9 +1131,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             {% endif %}
           {% endfor %}
           {% if undeclared %}
+          <div class="tool-evidence-list">
             {% for tool in undeclared %}
-            <span class="tag tag-orange">{{ tool }} ⚠</span>
+            <div class="tool-evidence-item">
+              <details>
+                <summary>
+                  <span class="tag tag-orange">{{ tool }} ⚠</span>
+                  <span class="tool-evidence-why">[why?]</span>
+                </summary>
+                <blockquote class="discovery-excerpt">
+                  "{{ attack_surface.discovery_evidence.get(
+                      tool,
+                      'No response excerpt captured.'
+                  ) }}"
+                </blockquote>
+              </details>
+            </div>
             {% endfor %}
+          </div>
           {% else %}
             <span style="color: #64748b;">None additional</span>
           {% endif %}
@@ -1195,6 +1264,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </span>
             {% if finding.needs_review %}
             <span class="needs-review-badge">Needs Review</span>
+            {% endif %}
+            {% if finding.llm_judge_partial %}
+            <span class="partial-disclosure-badge">
+              Partial Disclosure
+            </span>
             {% endif %}
           </div>
 

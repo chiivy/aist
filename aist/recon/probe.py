@@ -45,6 +45,7 @@ class ReconReport:
     system_prompt_exposed: bool = False
     declared_tools: list = field(default_factory=list)
     discovered_tools: list = field(default_factory=list)
+    discovery_evidence: dict = field(default_factory=dict)
     has_memory: bool = False
     model_hint: str = "unknown"
     baseline_response: str = ""
@@ -246,10 +247,16 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         log.info("running_probe", probe="R3")
         for prompt in RECON_PROBES[2]["prompts"]:
             response = await send_probe(client, config, prompt)
-            tools = _extract_tools_from_response(response)
+            tools, tool_evidence = _extract_tools_with_evidence(
+                response
+            )
             for tool in tools:
                 if tool not in report.discovered_tools:
                     report.discovered_tools.append(tool)
+                if tool not in report.discovery_evidence:
+                    report.discovery_evidence[tool] = (
+                        tool_evidence[tool]
+                    )
 
         # Add declared tools from config
         report.declared_tools = config.target.tools
@@ -338,13 +345,41 @@ def _looks_like_system_prompt(response: str) -> bool:
     return any(indicator in response_lower for indicator in indicators)
 
 
-def _extract_tools_from_response(response: str) -> list:
+def _extract_response_excerpt(
+    response: str,
+    keyword: str,
+    max_len: int = 200,
+) -> str:
     """
-    Extract tool mentions from a capability
-    mapping response.
+    Extract a readable snippet around a keyword match.
     """
     if not response:
-        return []
+        return ""
+
+    response_lower = response.lower()
+    idx = response_lower.find(keyword.lower())
+    if idx == -1:
+        return response[:max_len].strip()
+
+    start = max(0, idx - 60)
+    end = min(len(response), idx + len(keyword) + 100)
+    excerpt = response[start:end].strip()
+
+    if start > 0:
+        excerpt = "..." + excerpt
+    if end < len(response):
+        excerpt = excerpt + "..."
+
+    return excerpt
+
+
+def _extract_tools_with_evidence(response: str) -> tuple[list, dict]:
+    """
+    Extract tool mentions and the response excerpt
+    that revealed each tool.
+    """
+    if not response:
+        return [], {}
 
     tool_keywords = {
         "email": ["email", "send mail", "outlook", "gmail"],
@@ -357,13 +392,31 @@ def _extract_tools_from_response(response: str) -> list:
     }
 
     found_tools = []
+    discovery_evidence = {}
     response_lower = response.lower()
 
     for tool, keywords in tool_keywords.items():
-        if any(keyword in response_lower for keyword in keywords):
-            found_tools.append(tool)
+        for keyword in keywords:
+            if keyword in response_lower:
+                found_tools.append(tool)
+                if tool not in discovery_evidence:
+                    discovery_evidence[tool] = (
+                        _extract_response_excerpt(
+                            response, keyword
+                        )
+                    )
+                break
 
-    return found_tools
+    return found_tools, discovery_evidence
+
+
+def _extract_tools_from_response(response: str) -> list:
+    """
+    Extract tool mentions from a capability
+    mapping response.
+    """
+    tools, _ = _extract_tools_with_evidence(response)
+    return tools
 
 
 def _indicates_memory(response: str) -> bool:

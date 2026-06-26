@@ -37,6 +37,7 @@ CATEGORY_FILES = {
     "D": "category_d.yaml",
     "E": "category_e.yaml",
     "F": "category_f.yaml",
+    "BL": "category_bl.yaml",
 }
 
 

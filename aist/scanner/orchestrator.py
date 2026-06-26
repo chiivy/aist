@@ -47,6 +47,7 @@ from aist.scanner.toolparam import run_toolparam_scanner
 from aist.scanner.output import run_output_scanner
 from aist.scoring.severity import (
     calculate_severity,
+    apply_partial_disclosure_cap,
     get_owasp_reference,
 )
 from aist.scoring.confidence import (
@@ -235,7 +236,7 @@ async def run_full_scan(
 
             if scanner_name == "direct":
                 direct_cats = [
-                    "A", "B", "C", "D", "E", "F"
+                    "A", "B", "C", "D", "E", "F", "BL"
                 ]
                 if config.scan.safe_mode:
                     direct_cats = [
@@ -411,6 +412,13 @@ async def run_full_scan(
                 credentials_detected=(
                     evidence.credentials_detected
                 ),
+            )
+
+            severity = apply_partial_disclosure_cap(
+                severity,
+                partial=evidence.llm_judge_partial is True,
+                canary_leaked=evidence.canary_leaked,
+                credentials_detected=evidence.credentials_detected,
             )
 
             confidence = calculate_confidence(
@@ -641,12 +649,14 @@ def _get_severity_base(payload_id: str) -> str:
         return RECON_SEVERITY[payload_id]
 
     critical_patterns = ["C3", "E1", "E2", "E3", "E4",
-                         "H4", "H6", "I5", "CANARY"]
+                         "H4", "H6", "I5", "CANARY",
+                         "BL1", "BL2", "BL3"]
     high_patterns = ["A1", "A2", "A3", "B1", "B2", "B3",
                      "B5", "B6", "C1", "C2", "C4", "D1",
                      "E5", "F1", "F2", "F3", "G1", "G2",
                      "G5", "G6", "G10", "H1", "H2", "H3",
-                     "H5", "H8", "I1", "I2", "I3", "I6"]
+                     "H5", "H8", "I1", "I2", "I3", "I6",
+                     "BL4", "BL5"]
     low_patterns = ["D4", "G9"]
 
     for pattern in critical_patterns:
