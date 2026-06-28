@@ -35,15 +35,21 @@ Recon and discovery run before scanners: passive probes map tools, endpoints, co
 
 ---
 
-## Quick start
+## Installation
 
 ```bash
 git clone https://github.com/chiivy/aist
 cd aist
+pip install -e .
+```
+
+---
+
+## Quick start
+
+```bash
 cp .env.example .env
 # Edit .env — see docs/canary_setup.md for optional canary tokens
-
-pip install -e .
 
 aist scan --target https://your-agent.com/chat \
           --tools email,files,database \
@@ -212,6 +218,16 @@ guidelines on issues, pull requests, and development setup.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## Roadmap
+
+| Version | Status | Focus |
+|---------|--------|-------|
+| v1.0 | ✓ Released June 2026 | 13 payload categories, LLM judge validation, tool-aware severity scoring, authenticated scanning, context-aware payload generation, HTML/JSON/SARIF reports |
+| v1.1 | Q3 2026 | AISTPet benchmark suite, MCP protocol testing, adaptive payload generation, PyPI publishing |
+| v2.0 | Q4 2026 | CI/CD native integration, continuous monitoring mode, full-stack agent testing |
 
 ---
 
