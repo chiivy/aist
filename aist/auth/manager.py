@@ -10,14 +10,19 @@ Supported methods:
     sso     -- Azure AD device code flow
     apikey  -- API key in header
     cookie  -- Session cookie
+    browser -- Interactive browser login (SSO/MFA)
     none    -- No authentication (default)
 """
 
 import httpx
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 from dataclasses import dataclass, field
 from aist.logger import get_logger
+
+if TYPE_CHECKING:
+    from aist.auth.browser import BrowserSession
+    from aist.config import TargetConfig
 
 log = get_logger(__name__)
 
@@ -36,6 +41,8 @@ class AuthConfig:
     cookie_name: Optional[str] = None
     cookie_value: Optional[str] = None
     token_expiry: Optional[int] = None
+    browser_target_url: str = ""
+    browser_session: Optional[Any] = None
 
 
 class AuthManager:
@@ -45,11 +52,18 @@ class AuthManager:
     to attach to every scan request.
     """
 
-    def __init__(self, config: AuthConfig):
+    def __init__(
+        self,
+        config: AuthConfig,
+        target_config: Optional["TargetConfig"] = None,
+    ):
         self.config = config
+        self.target_config = target_config
         self._token: Optional[str] = None
         self._cookies: dict = {}
         self._token_expires_at: Optional[float] = None
+        self._browser_session: Optional["BrowserSession"] = None
+        self._browser_headers: dict = {}
 
     async def authenticate(self) -> bool:
         """
@@ -80,6 +94,9 @@ class AuthManager:
         elif auth_type == "cookie":
             return await self._setup_cookie()
 
+        elif auth_type == "browser":
+            return await self._login_browser()
+
         else:
             log.warning("unknown_auth_type",
                 auth_type=auth_type)
@@ -94,10 +111,10 @@ class AuthManager:
             return {}
 
         headers = {}
+        if self._browser_headers:
+            headers.update(self._browser_headers)
         if self._token:
-            headers[self.config.header_name] = (
-                self._token
-            )
+            headers[self.config.header_name] = self._token
         return headers
 
     def get_cookies(self) -> dict:
@@ -106,6 +123,24 @@ class AuthManager:
         every scan request.
         """
         return self._cookies
+
+    def get_browser_session(self) -> Optional["BrowserSession"]:
+        """Return captured browser session, if any."""
+        return self._browser_session
+
+    def apply_browser_session_to_target(self) -> None:
+        """Apply captured request format to target config."""
+        session = self._browser_session
+        target = self.target_config
+        if not session or not target:
+            return
+
+        if session.message_field:
+            target.message_field = session.message_field
+        if session.extra_body_fields:
+            target.custom_body_fields = dict(
+                session.extra_body_fields
+            )
 
     def is_token_expired(self) -> bool:
         """Check if token is expired or expiring soon."""
@@ -128,6 +163,8 @@ class AuthManager:
             return await self._refresh_sso_token()
         elif auth_type == "basic":
             return await self._login_basic()
+        elif auth_type == "browser":
+            return await self._login_browser()
         else:
             log.warning(
                 "token_refresh_not_supported",
@@ -231,6 +268,68 @@ class AuthManager:
         }
         log.info("auth_cookie_configured",
             cookie_name=self.config.cookie_name)
+        return True
+
+    async def _login_browser(self) -> bool:
+        """
+        Launch a browser for interactive login and
+        capture session cookies, headers, and format.
+        """
+        from aist.auth.browser import capture_browser_session
+
+        url = (
+            self.config.browser_target_url
+            or self.config.login_url
+            or ""
+        )
+
+        if not url:
+            log.error(
+                "browser_auth_no_url",
+                message="Provide --auth-login-url "
+                        "for browser auth",
+            )
+            return False
+
+        session = await capture_browser_session(url)
+
+        if not session:
+            return False
+
+        if session.headers:
+            self._browser_headers = dict(session.headers)
+            auth_header = (
+                session.headers.get("authorization")
+                or session.headers.get("Authorization")
+            )
+            if auth_header:
+                self._token = auth_header
+                if auth_header.lower().startswith("bearer "):
+                    self.config.header_name = "Authorization"
+
+        if session.cookies:
+            self._cookies = {
+                cookie["name"]: cookie["value"]
+                for cookie in session.cookies
+            }
+
+        self._browser_session = session
+        self.config.browser_session = session
+        self.apply_browser_session_to_target()
+
+        if session.chat_endpoint:
+            log.info(
+                "browser_auth_endpoint_captured",
+                endpoint=session.chat_endpoint,
+            )
+
+        log.info(
+            "browser_auth_success",
+            endpoint=session.chat_endpoint,
+            cookies=len(session.cookies),
+            headers=list(session.headers.keys()),
+        )
+
         return True
 
     async def _login_basic(self) -> bool:

@@ -368,6 +368,9 @@ def load_config(
         cookie_value=os.getenv(
             "AIST_AUTH_COOKIE_VALUE"
         ),
+        browser_target_url=os.getenv(
+            "AIST_AUTH_LOGIN_URL", ""
+        ),
     )
     # Create output directories if they do not exist
     os.makedirs(config.scan.reports_dir, exist_ok=True)

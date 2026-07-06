@@ -98,11 +98,23 @@ def run_interactive_wizard() -> dict:
         default="http://localhost:5000/chat",
     )
 
+    console.print("""
+Authentication options:
+  none    - No authentication required
+  bearer  - Paste a Bearer token
+  basic   - Username and password
+  apikey  - API key in header
+  sso     - Azure AD device code flow
+  cookie  - Session cookie
+  browser - Log in via browser (recommended
+            for SSO, MFA, complex auth)
+""")
+
     auth_type = click.prompt(
         "Authentication type",
         type=click.Choice([
             "none", "bearer", "basic",
-            "apikey", "sso", "cookie",
+            "apikey", "sso", "cookie", "browser",
         ]),
         default="none",
     )
@@ -143,6 +155,16 @@ def run_interactive_wizard() -> dict:
         )
         auth_cookie_value = click.prompt(
             "Cookie value", hide_input=True
+        )
+    elif auth_type == "browser":
+        auth_login_url = click.prompt(
+            "App URL to open in browser",
+            default=target,
+        )
+        console.print(
+            "[dim]A browser will open when "
+            "the scan starts. Log in and send "
+            "one test message, then return here.[/dim]"
         )
 
     message_field = "message"
@@ -437,8 +459,18 @@ def main():
          "Appears in report for audit purposes. "
          "Can also be set via AIST_OPERATOR in .env"
 )
-@click.option("--auth-type", default="none",
-    help="Auth type: none, bearer, basic, apikey, sso, cookie")
+@click.option(
+    "--auth-type",
+    default="none",
+    type=click.Choice([
+        "none", "bearer", "basic",
+        "apikey", "sso", "cookie", "browser",
+    ]),
+    help="Auth type. Use 'browser' for SSO, "
+         "MFA, or any browser-based login. "
+         "AIST opens a browser for you to "
+         "log in normally.",
+)
 @click.option("--auth-token", default=None,
     help="Bearer token or API key value")
 @click.option("--auth-header", default="Authorization",
@@ -615,6 +647,10 @@ def scan(
     config.auth.login_url = auth_login_url
     config.auth.tenant_id = auth_tenant_id
     config.auth.client_id = auth_client_id
+    if auth_type == "browser":
+        config.auth.browser_target_url = (
+            auth_login_url or target
+        )
     if auth_cookie_value:
         config.auth.cookie_name = auth_cookie_name or "session"
         config.auth.cookie_value = auth_cookie_value

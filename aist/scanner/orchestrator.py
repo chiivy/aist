@@ -148,7 +148,10 @@ async def run_full_scan(
             "target.[/yellow]\n"
         )
 
-    auth_manager = AuthManager(config.auth)
+    auth_manager = AuthManager(
+        config.auth,
+        target_config=config.target,
+    )
     auth_ok = await auth_manager.authenticate()
     if not auth_ok:
         console.print(
@@ -170,6 +173,19 @@ async def run_full_scan(
             "duration_seconds": 0,
             "auth_failed": True,
         }
+
+    if config.auth.auth_type.lower() == "browser":
+        browser_session = auth_manager.get_browser_session()
+        if browser_session and browser_session.chat_endpoint:
+            captured = browser_session.chat_endpoint
+            if captured != config.target.endpoint:
+                console.print(
+                    f"\n[cyan]Browser captured chat endpoint:[/cyan] "
+                    f"{captured}\n"
+                    f"[dim]This may differ from your --target URL. "
+                    f"Using captured endpoint for scan.[/dim]\n"
+                )
+                config.target.endpoint = captured
 
     with Progress(
         SpinnerColumn(),

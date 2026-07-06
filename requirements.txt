@@ -8,6 +8,9 @@ python-dotenv>=1.0.0
 rich>=13.0.0
 pyfiglet>=1.0.0
 
+# Optional: browser-based authentication (SSO/MFA)
+playwright>=1.40.0
+
 # Development dependencies
 pytest>=8.0.0
 pytest-asyncio>=0.23.0

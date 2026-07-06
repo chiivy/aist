@@ -23,6 +23,9 @@ setup(
         "rich>=13.0.0",
         "pyfiglet>=1.0.0",
     ],
+    extras_require={
+        "browser": ["playwright>=1.40.0"],
+    },
     entry_points={
         "console_scripts": [
             "aist=aist.cli:main",
