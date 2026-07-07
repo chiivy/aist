@@ -112,6 +112,7 @@ class ScanEvidence:
     infra_severity_scores: list = field(default_factory=list)
     generated_payload_count: int = 0
     generated_agent_context: Optional[str] = None
+    app_context_source: str = ""
 
 
 def is_genuine_finding(evidence: Evidence) -> bool:

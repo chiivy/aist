@@ -50,6 +50,7 @@ from aist.scanner.infrastructure import run_infrastructure_scanner
 from aist.scanner.multiagent import run_multiagent_scanner
 from aist.scanner.payload_generator import (
     generate_context_payloads,
+    synthesise_agent_profile,
 )
 from aist.scanner.generated_scanner import (
     run_generated_scanner,
@@ -249,6 +250,26 @@ async def run_full_scan(
             discovery_result,
             config,
         )
+
+        if not config.target.app_context:
+            synthesised = await synthesise_agent_profile(
+                config=config,
+                recon_report=recon_report,
+                discovery_result=discovery_result,
+            )
+            if synthesised:
+                config.target.app_context = synthesised
+                scan_evidence.app_context_source = "auto-detected"
+                console.print(
+                    "\n[bold]Agent Profile (auto-detected):[/bold]\n"
+                    f"[dim]{synthesised}[/dim]\n"
+                )
+        elif config.target.app_context:
+            scan_evidence.app_context_source = "operator"
+            console.print(
+                "\n[bold]Agent Profile (operator-provided):[/bold]\n"
+                f"[dim]{config.target.app_context}[/dim]\n"
+            )
 
         generation_result = await generate_context_payloads(
             config=config,

@@ -1308,6 +1308,9 @@ def _render_template(
         ),
         scan_goals=getattr(config.scan, "goals", None),
         app_context=getattr(config.target, "app_context", ""),
+        app_context_source=getattr(
+            scan_evidence, "app_context_source", ""
+        ),
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -2372,7 +2375,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       {% endif %}
       {% if app_context %}
       <div class="info-row">
-        <span class="info-key">Application Context</span>
+        <span class="info-key">
+          Application Context
+          {% if app_context_source == "operator" %}
+          (operator-provided)
+          {% elif app_context_source == "auto-detected" %}
+          (auto-detected)
+          {% endif %}
+        </span>
         <span class="info-value">{{ app_context }}</span>
       </div>
       {% endif %}
