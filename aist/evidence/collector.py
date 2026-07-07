@@ -61,6 +61,11 @@ class Evidence:
     gen_rationale: Optional[str] = None
     gen_sensitivity: Optional[str] = None
 
+    # Iterative follow-up probe metadata
+    followup_depth: Optional[int] = None
+    followup_parent_id: Optional[str] = None
+    followup_escalated: bool = False
+
     # Infrastructure artifacts in this response
     discovered_artifacts: dict = field(default_factory=dict)
     resource_validation_note: Optional[str] = None
@@ -296,6 +301,8 @@ def _apply_judge_verdict(
         "reasoning",
         verdict.get("notes", ""),
     )
+    if verdict.get("escalated"):
+        evidence.followup_escalated = True
 
 
 def _build_full_judge_prompt(

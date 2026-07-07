@@ -16,6 +16,7 @@ from aist.evidence.collector import (
     collect_evidence,
     run_llm_judge,
 )
+from aist.scanner.followup import run_followup_probe
 from aist.scanner.payload_generator import (
     GeneratedPayload,
 )
@@ -111,6 +112,32 @@ async def run_generated_scanner(
                     ),
                 )
             ]
+
+            if (
+                evidence.llm_judge_partial
+                and config.llm.enabled
+                and config.scan.followup_enabled
+                and not config.scan.safe_mode
+            ):
+                followup_result = await run_followup_probe(
+                    config=config,
+                    original_evidence=evidence,
+                    canary_token=canary_token,
+                    auth_manager=auth_manager,
+                )
+
+                if followup_result.all_evidence:
+                    all_evidence.extend(
+                        followup_result.all_evidence
+                    )
+
+                if followup_result.escalated:
+                    log.warning(
+                        "finding_escalated_via_followup",
+                        original_id=evidence.payload_id,
+                        depth=followup_result.depth_reached,
+                        stop_reason=followup_result.stop_reason,
+                    )
 
             if evidence.llm_judge_success:
                 log.warning(

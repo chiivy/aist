@@ -141,6 +141,7 @@ def generate_json_report(
             "tools_declared": config.target.tools,
             "llm_judge_enabled": config.llm.enabled,
             "canary_enabled": config.canary.enabled,
+            "app_context": config.target.app_context or "",
         },
         "report_hash": "PLACEHOLDER",
     }

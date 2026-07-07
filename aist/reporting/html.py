@@ -13,6 +13,7 @@ any modification is detectable.
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,8 @@ from aist.evidence.collector import is_genuine_finding
 
 log = get_logger(__name__)
 console = Console()
+
+_FOLLOWUP_ID_RE = re.compile(r"^(.+)-FU(\d+)$")
 
 
 def generate_html_report(
@@ -104,8 +107,9 @@ def generate_html_report(
     )
 
     # Render HTML
+    display_findings = _group_findings_for_display(findings)
     html = _render_template(
-        findings=findings,
+        findings=display_findings,
         summary=summary,
         attack_surface=attack_surface,
         compliance_summary=compliance_summary,
@@ -816,6 +820,19 @@ def _build_findings(
                 scan_started_at=scan_started_at,
                 scan_completed_at=scan_completed_at,
             ),
+            "followup_depth": getattr(
+                evidence, "followup_depth", None
+            ),
+            "followup_parent_id": getattr(
+                evidence, "followup_parent_id", None
+            ),
+            "followup_escalated": getattr(
+                evidence, "followup_escalated", False
+            ),
+            "is_followup": (
+                getattr(evidence, "followup_depth", None)
+                is not None
+            ),
             "compliance": compliance,
             "generic_guidance": generic,
             "response_hash": evidence.response_hash,
@@ -829,6 +846,50 @@ def _build_findings(
     )
 
     return findings
+
+
+def _group_findings_for_display(findings: list) -> list:
+    """
+    Nest follow-up findings under their parent finding cards.
+
+    Follow-up payload IDs use the suffix ``-FU1``, ``-FU2``, etc.
+    """
+    followups_by_parent: dict[str, list] = {}
+    parents: list = []
+    parent_ids: set[str] = set()
+
+    for finding in findings:
+        match = _FOLLOWUP_ID_RE.match(finding["payload_id"])
+        if match:
+            parent_id = match.group(1)
+            finding["followup_parent_id"] = parent_id
+            finding["followup_depth"] = int(match.group(2))
+            finding["is_followup"] = True
+            followups_by_parent.setdefault(
+                parent_id, []
+            ).append(finding)
+        else:
+            parents.append(finding)
+            parent_ids.add(finding["payload_id"])
+
+    for parent in parents:
+        parent["followups"] = sorted(
+            followups_by_parent.get(
+                parent["payload_id"], []
+            ),
+            key=lambda item: item.get("followup_depth", 0),
+        )
+
+    for parent_id, children in followups_by_parent.items():
+        if parent_id not in parent_ids:
+            for child in sorted(
+                children,
+                key=lambda item: item.get("followup_depth", 0),
+            ):
+                child["followups"] = []
+                parents.append(child)
+
+    return parents
 
 
 def _build_summary(findings: list, scan_evidence) -> dict:
@@ -1177,6 +1238,8 @@ def _render_template(
         generated_agent_context=getattr(
             scan_evidence, "generated_agent_context", None
         ),
+        scan_goals=getattr(config.scan, "goals", None),
+        app_context=getattr(config.target, "app_context", ""),
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -1785,6 +1848,67 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     margin-left: 0.5rem;
   }
 
+  .followup-depth-badge {
+    background: #422006;
+    color: #fdba74;
+    border: 1px solid #f97316;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    margin-right: 0.5rem;
+  }
+
+  .followup-escalated-badge {
+    background: #450a0a;
+    color: #fca5a5;
+    border: 1px solid #ef4444;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
+  }
+
+  .followup-group {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px dashed #334155;
+  }
+
+  .followup-child-card {
+    background: #0f1720;
+    border: 1px solid #334155;
+    border-left: 3px solid #f97316;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-top: 1rem;
+    margin-left: 1.5rem;
+  }
+
+  .followup-child-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .followup-parent-ref {
+    color: #94a3b8;
+    font-size: 0.8rem;
+  }
+
+  .followup-escalated-note {
+    background: #450a0a;
+    border: 1px solid #7f1d1d;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: #fca5a5;
+  }
+
   .context-generated-note {
     background: #1e1b4b;
     border: 1px solid #4338ca;
@@ -2172,6 +2296,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <span class="info-key">Total Findings</span>
         <span class="info-value">{{ summary.total_findings }}</span>
       </div>
+      {% if scan_goals %}
+      <div class="info-row">
+        <span class="info-key">Testing Goals</span>
+        <span class="info-value">{{ scan_goals | join(', ') }}</span>
+      </div>
+      {% endif %}
+      {% if app_context %}
+      <div class="info-row">
+        <span class="info-key">Application Context</span>
+        <span class="info-value">{{ app_context }}</span>
+      </div>
+      {% endif %}
       <div class="info-row">
         <span class="info-key">Report Hash</span>
         <span class="info-value" style="font-family: monospace; font-size: 0.75rem;">
@@ -2607,6 +2743,67 @@ HTML_TEMPLATE = """<!DOCTYPE html>
               <div style="font-size: 0.85rem; color: #94a3b8;">
                 {{ step }}
               </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if finding.followups %}
+          <div class="followup-group">
+            <div class="finding-section-label">
+              Iterative Follow-Up Probes
+            </div>
+            {% for fu in finding.followups %}
+            <div class="followup-child-card
+                        {{ fu.severity_label | lower }}">
+              <div class="followup-child-header">
+                <span class="followup-depth-badge">
+                  FOLLOW-UP DEPTH {{ fu.followup_depth }}
+                </span>
+                <span class="finding-id">{{ fu.payload_id }}</span>
+                <span class="followup-parent-ref">
+                  Follow-up to: {{ fu.followup_parent_id }}
+                </span>
+                {% if fu.followup_escalated %}
+                <span class="followup-escalated-badge">
+                  ESCALATED
+                </span>
+                {% endif %}
+              </div>
+              {% if fu.followup_escalated %}
+              <div class="followup-escalated-note">
+                This follow-up revealed additional
+                information beyond the original finding.
+              </div>
+              {% endif %}
+              <div class="finding-section-label">
+                Follow-Up Probe
+              </div>
+              <div class="code-block">{{ fu.prompt_sent }}</div>
+              <div class="finding-section-label">
+                Response Received
+              </div>
+              <div class="evidence-block">
+                {{ fu.response_received }}
+              </div>
+              {% if fu.llm_judge_reasoning %}
+              <div class="finding-section-label">
+                LLM Judge Analysis
+              </div>
+              <div style="background: #0f1720;
+                          border: 1px solid #1e3a5f;
+                          border-radius: 6px;
+                          padding: 1rem;
+                          font-size: 0.85rem;
+                          color: #93c5fd;">
+                {{ fu.llm_judge_reasoning }}
+                <span style="color: #64748b;
+                             margin-left: 1rem;">
+                  Confidence:
+                  {{ fu.llm_judge_confidence }}%
+                </span>
+              </div>
+              {% endif %}
             </div>
             {% endfor %}
           </div>

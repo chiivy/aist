@@ -20,6 +20,28 @@ log = get_logger(__name__)
 # Load .env file if it exists
 load_dotenv()
 
+GOAL_CATEGORY_MAP = {
+    "exfiltrate": ["D", "I", "C"],
+    "abuse-tools": ["E", "H", "BL"],
+    "bypass-controls": ["B", "G", "F"],
+    "business-logic": ["BL", "D"],
+    "multi-agent": ["MA", "S", "I"],
+    "infrastructure": ["J"],
+    "reconnaissance": ["D", "GEN"],
+    "full": None,
+}
+
+GOAL_DESCRIPTIONS = {
+    "exfiltrate": "Exfiltrate sensitive internal data",
+    "abuse-tools": "Abuse external tool integrations",
+    "bypass-controls": "Override system and safety controls",
+    "business-logic": "Manipulate business logic and workflows",
+    "multi-agent": "Exploit multi-agent architectures",
+    "infrastructure": "Identify infrastructure misconfigurations",
+    "reconnaissance": "Map attack surface and capabilities",
+    "full": "Full assessment across all attack vectors",
+}
+
 
 @dataclass
 class ScanConfig:
@@ -36,6 +58,7 @@ class ScanConfig:
     expose_evidence: bool = False
     executive_mode: bool = False
     categories: Optional[list] = None
+    goals: Optional[list] = None
     jitter_min_seconds: float = 1.0
     jitter_max_seconds: float = 5.0
     rotate_session_between_runs: bool = True
@@ -43,6 +66,8 @@ class ScanConfig:
     operator: Optional[str] = None
     organisation: Optional[str] = None
     safe_mode: bool = False
+    max_followup_depth: int = 3
+    followup_enabled: bool = True
 
 
 @dataclass
@@ -62,6 +87,11 @@ class TargetConfig:
         default_factory=dict
     )
     response_field: str = ""
+    app_context: str = ""
+    # Optional description of what the target
+    # agent does, its purpose, what data it
+    # has access to, and what it should never do.
+    # Used to generate more targeted payloads.
 
 
 @dataclass
@@ -127,6 +157,64 @@ class AISTConfig:
     canary: CanaryConfig = field(default_factory=CanaryConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
 
+
+def resolve_goals_to_categories(
+    goal_list: list[str],
+) -> Optional[list[str]]:
+    """
+    Map attack goals to payload category codes.
+
+    Returns None when any goal resolves to a full scan
+    (e.g. ``full``). Returns an empty list when no valid
+    goals were provided.
+    """
+    resolved: set[str] = set()
+    for goal in goal_list:
+        if goal not in GOAL_CATEGORY_MAP:
+            continue
+        cats = GOAL_CATEGORY_MAP[goal]
+        if cats is None:
+            return None
+        resolved.update(cats)
+    return sorted(resolved) if resolved else []
+
+
+def apply_goals_to_config(
+    config: "AISTConfig",
+    goals_str: str,
+    warn_unknown: bool = True,
+) -> list[str]:
+    """
+    Resolve a comma-separated goals string onto scan config.
+
+    Sets ``config.scan.goals`` and ``config.scan.categories``.
+    """
+    goal_list = [
+        g.strip() for g in goals_str.split(",") if g.strip()
+    ]
+    config.scan.goals = goal_list
+    resolved_categories: Optional[set[str]] = set()
+
+    for goal in goal_list:
+        if goal in GOAL_CATEGORY_MAP:
+            cats = GOAL_CATEGORY_MAP[goal]
+            if cats is None:
+                config.scan.categories = None
+                return goal_list
+            resolved_categories.update(cats)
+        elif warn_unknown:
+            log.warning(
+                "unknown_scan_goal",
+                goal=goal,
+                valid_goals=list(GOAL_CATEGORY_MAP.keys()),
+            )
+
+    if resolved_categories is not None:
+        config.scan.categories = sorted(resolved_categories)
+
+    return goal_list
+
+
 def load_config(
     target_endpoint: str = None,
     tools: list = None,
@@ -138,6 +226,7 @@ def load_config(
     expose_evidence: bool = False,
     executive_mode: bool = False,
     categories: list = None,
+    goals: str = None,
     operator: str = None,
 ) -> AISTConfig:
     """
@@ -195,6 +284,14 @@ def load_config(
     config.scan.executive_mode = executive_mode
     config.scan.categories = categories
 
+    effective_goals = goals or (
+        os.getenv("AIST_GOALS")
+        if categories is None and goals is None
+        else None
+    )
+    if effective_goals:
+        apply_goals_to_config(config, effective_goals)
+
     # Operator / audit trail
     config.scan.operator = (
         operator or
@@ -202,6 +299,15 @@ def load_config(
     )
     config.scan.organisation = os.getenv(
         "AIST_ORGANISATION", ""
+    )
+
+    config.scan.max_followup_depth = int(
+        os.getenv("AIST_MAX_FOLLOWUP_DEPTH", "3")
+    )
+    config.scan.followup_enabled = (
+        os.getenv(
+            "AIST_FOLLOWUP_ENABLED", "true"
+        ).lower() == "true"
     )
 
     # Jitter settings
@@ -254,6 +360,9 @@ def load_config(
 
     config.target.response_field = os.getenv(
         "AIST_RESPONSE_FIELD", ""
+    )
+    config.target.app_context = os.getenv(
+        "AIST_APP_CONTEXT", ""
     )
 
     if not config.target.api_key:

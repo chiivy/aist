@@ -1281,6 +1281,17 @@ Agent response to analyse:
         )
 
 
+def _prepend_app_context(judge_prompt: str, config) -> str:
+    """Prepend operator-provided application context to a judge prompt."""
+    if config.target.app_context:
+        return (
+            f"Application context: "
+            f"{config.target.app_context}\n\n"
+            + judge_prompt
+        )
+    return judge_prompt
+
+
 async def _recon_to_evidence(
     recon_report,
     discovery_result,
@@ -1350,7 +1361,9 @@ Respond in JSON:
 
             validated = await run_llm_judge(
                 evidence=temp_evidence,
-                llm_judge_prompt=judge_prompt,
+                llm_judge_prompt=_prepend_app_context(
+                    judge_prompt, config
+                ),
                 config=config,
             )
 
@@ -1434,7 +1447,9 @@ Respond in JSON:
 
             validated = await run_llm_judge(
                 evidence=temp_evidence,
-                llm_judge_prompt=judge_prompt,
+                llm_judge_prompt=_prepend_app_context(
+                    judge_prompt, config
+                ),
                 config=config,
             )
 
@@ -1505,7 +1520,9 @@ Respond in JSON:
 
             validated = await run_llm_judge(
                 evidence=temp_evidence,
-                llm_judge_prompt=judge_prompt,
+                llm_judge_prompt=_prepend_app_context(
+                    judge_prompt, config
+                ),
                 config=config,
             )
 
@@ -1575,7 +1592,9 @@ Respond in JSON:
 
         validated = await run_llm_judge(
             evidence=temp_evidence,
-            llm_judge_prompt=judge_prompt,
+            llm_judge_prompt=_prepend_app_context(
+                judge_prompt, config
+            ),
             config=config,
         )
 

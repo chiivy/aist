@@ -38,6 +38,7 @@ from aist.evidence.collector import (
     run_llm_judge,
     detect_write_action_confirmation,
 )
+from aist.scanner.followup import run_followup_probe
 
 log = get_logger(__name__)
 
@@ -335,6 +336,34 @@ async def run_direct_scanner(
                     run_results[idx].llm_judge_confidence = (
                         evidence.llm_judge_confidence
                     )
+
+                if (
+                    evidence.llm_judge_partial
+                    and config.llm.enabled
+                    and config.scan.followup_enabled
+                    and not config.scan.safe_mode
+                ):
+                    followup_result = await run_followup_probe(
+                        config=config,
+                        original_evidence=evidence,
+                        canary_token=canary_token,
+                        auth_manager=auth_manager,
+                    )
+
+                    if followup_result.all_evidence:
+                        evidence_items.extend(
+                            followup_result.all_evidence
+                        )
+
+                    if followup_result.escalated:
+                        log.warning(
+                            "finding_escalated_via_followup",
+                            original_id=evidence.payload_id,
+                            depth=followup_result.depth_reached,
+                            stop_reason=(
+                                followup_result.stop_reason
+                            ),
+                        )
 
             all_evidence.extend(evidence_items)
             all_run_results[payload_id] = run_results

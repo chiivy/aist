@@ -93,6 +93,13 @@ async def generate_context_payloads(
         discovery_result,
     )
 
+    if config.target.app_context:
+        context_parts.insert(
+            0,
+            "Application description (provided "
+            f"by operator): {config.target.app_context}",
+        )
+
     if not context_parts:
         log.info(
             "payload_generation_skipped",

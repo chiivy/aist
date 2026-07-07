@@ -13,16 +13,74 @@ import json as _json
 import re
 import sys
 from datetime import datetime
+from typing import Optional
 
 import click
 from rich.console import Console
 from rich.panel import Panel
 
-from aist.config import load_config
+from aist.config import (
+    GOAL_CATEGORY_MAP,
+    GOAL_DESCRIPTIONS,
+    load_config,
+)
 from aist.logger import get_logger, setup_logging
 
 console = Console()
 log = get_logger(__name__)
+
+
+def print_testing_goals(goal_list: list[str]) -> None:
+    """Print a summary of attack goals and mapped categories."""
+    console.print("\n[bold]Testing Goals:[/bold]")
+    for goal in goal_list:
+        if goal in GOAL_DESCRIPTIONS:
+            cats = GOAL_CATEGORY_MAP.get(goal, [])
+            cat_str = (
+                "all categories"
+                if cats is None
+                else f"categories {', '.join(cats)}"
+            )
+            console.print(
+                f"  [cyan]{goal}[/cyan]: "
+                f"{GOAL_DESCRIPTIONS[goal]} "
+                f"[dim]({cat_str})[/dim]"
+            )
+    console.print()
+
+
+def apply_cli_goals(
+    config,
+    goals_str: str,
+) -> None:
+    """Resolve CLI goals and warn about unknown goal names."""
+    goal_list = [
+        g.strip() for g in goals_str.split(",") if g.strip()
+    ]
+    resolved_categories: Optional[set[str]] = set()
+
+    for goal in goal_list:
+        if goal in GOAL_CATEGORY_MAP:
+            cats = GOAL_CATEGORY_MAP[goal]
+            if cats is None:
+                config.scan.categories = None
+                config.scan.goals = goal_list
+                print_testing_goals(goal_list)
+                return
+            resolved_categories.update(cats)
+        else:
+            console.print(
+                f"[yellow]Unknown goal: {goal}. "
+                f"Valid goals: "
+                f"{', '.join(GOAL_CATEGORY_MAP.keys())}"
+                f"[/yellow]"
+            )
+
+    config.scan.goals = goal_list
+    if resolved_categories is not None:
+        config.scan.categories = sorted(resolved_categories)
+
+    print_testing_goals(goal_list)
 
 
 def print_banner():
@@ -278,17 +336,99 @@ Payload tab to see all required fields.
         default="",
     )
 
-    run_all = click.confirm(
-        "Run all payload categories?",
-        default=True,
+    console.print("""
+[dim]
+Providing a description of your AI agent
+helps AIST generate more targeted and
+relevant test payloads.
+
+Example descriptions:
+  "Customer service agent for AcmeCorp.
+   Handles order queries and refunds up to $500.
+   Should never reveal other customers' data."
+
+  "Diesel forecast agent for telecom infrastructure.
+   Has read access to fuel data for 2000+ sites.
+   Should only return data for authorised regions."
+
+  "Internal HR assistant. Has access to employee
+   records, salaries, and performance reviews.
+   Should only show the requesting employee's data."
+[/dim]
+""")
+
+    app_context = click.prompt(
+        "Describe what this agent does (optional)",
+        default="",
     )
-    if run_all:
-        categories = "all"
-    else:
-        categories = click.prompt(
-            "Categories to run (comma separated, e.g. A,B,G)",
-            default="A,B,C,D",
+
+    if app_context:
+        console.print(
+            "[green]✓ Application context saved. "
+            "AIST will generate targeted payloads "
+            "based on this description.[/green]"
         )
+
+    testing_mode = click.prompt(
+        "\nTesting approach",
+        type=click.Choice(["goals", "categories", "all"]),
+        default="goals",
+    )
+    goals = None
+
+    if testing_mode == "goals":
+        console.print("""
+[dim]Available goals:
+  exfiltrate      Exfiltrate sensitive internal data
+  abuse-tools     Abuse external tool integrations
+  bypass-controls Override system and safety controls
+  business-logic  Manipulate business logic
+  multi-agent     Exploit multi-agent architectures
+  infrastructure  Infrastructure misconfigurations
+  reconnaissance  Map attack surface
+  full            Complete assessment[/dim]
+""")
+        goals = click.prompt(
+            "Goals to test (comma separated)",
+            default="full",
+        )
+        goal_list = [g.strip() for g in goals.split(",")]
+        resolved: Optional[set[str]] = set()
+        for goal in goal_list:
+            if goal not in GOAL_CATEGORY_MAP:
+                console.print(
+                    f"[yellow]Unknown goal: {goal}. "
+                    f"Valid goals: "
+                    f"{', '.join(GOAL_CATEGORY_MAP.keys())}"
+                    f"[/yellow]"
+                )
+                continue
+            cats = GOAL_CATEGORY_MAP[goal]
+            if cats is None:
+                resolved = None
+                break
+            resolved.update(cats)
+
+        if resolved is not None:
+            categories = ",".join(sorted(resolved))
+        else:
+            categories = "all"
+
+    elif testing_mode == "categories":
+        run_all = click.confirm(
+            "Run all payload categories?",
+            default=True,
+        )
+        if run_all:
+            categories = "all"
+        else:
+            categories = click.prompt(
+                "Categories to run (comma separated)",
+                default="D",
+            )
+
+    else:
+        categories = "all"
 
     safe_mode = click.confirm(
         "Enable safe mode? "
@@ -308,6 +448,7 @@ Payload tab to see all required fields.
         "all" if categories == "all"
         else categories
     )
+    goals_display = goals if goals else None
 
     console.print("\n[bold]Scan summary:[/bold]")
     console.print(f"  Target:       {target}")
@@ -336,7 +477,17 @@ Payload tab to see all required fields.
         f"  Tools:        "
         f"{', '.join(tools_list) if tools_list else 'none'}"
     )
-    console.print(f"  Categories:   {categories_display}")
+    if app_context:
+        preview = (
+            app_context[:60] + "..."
+            if len(app_context) > 60
+            else app_context
+        )
+        console.print(f"  App context:  {preview}")
+    if goals_display:
+        console.print(f"  Goals:        {goals_display}")
+    else:
+        console.print(f"  Categories:   {categories_display}")
     console.print(
         f"  Safe mode:    {'yes' if safe_mode else 'no'}"
     )
@@ -351,6 +502,8 @@ Payload tab to see all required fields.
         "target": target,
         "tools": tools,
         "categories": categories,
+        "goals": goals,
+        "app_context": app_context,
         "safe_mode": safe_mode,
         "operator": operator,
         "auth_type": auth_type,
@@ -453,6 +606,17 @@ def main():
          "Default: all"
 )
 @click.option(
+    "--goals",
+    default=None,
+    help="Attack goals to test. Comma separated. "
+         "Options: exfiltrate, abuse-tools, "
+         "bypass-controls, business-logic, "
+         "multi-agent, infrastructure, "
+         "reconnaissance, full. "
+         "Alternative to --categories for "
+         "goal-oriented testing.",
+)
+@click.option(
     "--operator",
     default=None,
     help="Name or handle of person running the scan. "
@@ -518,15 +682,35 @@ def main():
          "Common values: response, answer, "
          "message, content, output, text",
 )
+@click.option(
+    "--no-followup",
+    is_flag=True,
+    default=False,
+    help="Disable iterative follow-up probing. "
+         "Follow-up is enabled by default and "
+         "pursues partial findings up to 3 turns.",
+)
+@click.option(
+    "--app-context",
+    default=None,
+    help="Optional description of the target "
+         "agent: its purpose, data access, "
+         "and what it should protect. "
+         "Improves payload targeting accuracy. "
+         'Example: "Diesel forecast agent for '
+         "telecom sites. Has database access "
+         "to fuel levels for 2000+ sites. "
+         'Should only show data for authorised sites."',
+)
 def scan(
     target, tools, output, mode, runs,
     log_level, siem, expose_evidence,
-    executive, categories, operator,
+    executive, categories, goals, operator,
     auth_type, auth_token, auth_header,
     auth_username, auth_password, auth_login_url,
     auth_tenant_id, auth_client_id, safe_mode,
     message_field, body_fields, custom_headers,
-    response_field,
+    response_field, no_followup, app_context,
 ):
     """
     Run a full injection security scan against
@@ -552,6 +736,8 @@ def scan(
     wizard_body_fields = None
     wizard_custom_headers = None
     wizard_response_field = None
+    wizard_goals = None
+    wizard_app_context = None
 
     if target is None:
         wizard = run_interactive_wizard()
@@ -560,6 +746,8 @@ def scan(
         target = wizard["target"]
         tools = wizard["tools"]
         categories = wizard["categories"]
+        wizard_goals = wizard.get("goals")
+        wizard_app_context = wizard.get("app_context")
         safe_mode = wizard["safe_mode"]
         operator = wizard["operator"]
         auth_type = wizard["auth_type"]
@@ -579,6 +767,8 @@ def scan(
 
     if expose_evidence:
         expose_evidence = confirm_expose_evidence()
+
+    effective_goals = goals or wizard_goals
 
     tools_list = [
         t.strip() for t in tools.split(",") if t.strip()
@@ -610,10 +800,13 @@ def scan(
     )
     console.print(f"[bold]Mode:[/bold] {mode}")
     console.print(f"[bold]Payload runs:[/bold] {runs}")
-    console.print(
-        f"[bold]Categories:[/bold] "
-        f"{categories if categories == 'all' else categories_list}"
-    )
+    if effective_goals:
+        console.print(f"[bold]Goals:[/bold] {effective_goals}")
+    else:
+        console.print(
+            f"[bold]Categories:[/bold] "
+            f"{categories if categories == 'all' else categories_list}"
+        )
     console.print(f"[bold]Output:[/bold] {output}")
     console.print(
         f"[bold]Operator:[/bold] "
@@ -635,9 +828,20 @@ def scan(
         siem_endpoint=siem,
         expose_evidence=expose_evidence,
         executive_mode=executive,
-        categories=categories_list,
+        categories=(
+            None if effective_goals and categories == "all"
+            else categories_list
+        ),
+        goals=None,
         operator=operator,
     )
+
+    if effective_goals and not categories_list:
+        apply_cli_goals(config, effective_goals)
+    elif wizard_goals:
+        config.scan.goals = [
+            g.strip() for g in wizard_goals.split(",") if g.strip()
+        ]
 
     config.auth.auth_type = auth_type
     config.auth.token = auth_token
@@ -655,6 +859,13 @@ def scan(
         config.auth.cookie_name = auth_cookie_name or "session"
         config.auth.cookie_value = auth_cookie_value
     config.scan.safe_mode = safe_mode
+
+    if no_followup:
+        config.scan.followup_enabled = False
+
+    effective_app_context = app_context or wizard_app_context
+    if effective_app_context:
+        config.target.app_context = effective_app_context
 
     if message_field:
         config.target.message_field = message_field
