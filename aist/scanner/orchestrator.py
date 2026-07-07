@@ -133,13 +133,14 @@ async def run_full_scan(
     scan_start = datetime.utcnow()
 
     scan_evidence = ScanEvidence(
-        target=config.target.endpoint
+        target=config.target.endpoint or "pending"
     )
 
-    console.print(
-        f"\n[bold]Starting scan against:[/bold] "
-        f"[cyan]{config.target.endpoint}[/cyan]\n"
-    )
+    if config.target.endpoint:
+        console.print(
+            f"\n[bold]Starting scan against:[/bold] "
+            f"[cyan]{config.target.endpoint}[/cyan]\n"
+        )
 
     if config.scan.safe_mode:
         console.print(
@@ -174,18 +175,21 @@ async def run_full_scan(
             "auth_failed": True,
         }
 
-    if config.auth.auth_type.lower() == "browser":
-        browser_session = auth_manager.get_browser_session()
-        if browser_session and browser_session.chat_endpoint:
-            captured = browser_session.chat_endpoint
-            if captured != config.target.endpoint:
-                console.print(
-                    f"\n[cyan]Browser captured chat endpoint:[/cyan] "
-                    f"{captured}\n"
-                    f"[dim]This may differ from your --target URL. "
-                    f"Using captured endpoint for scan.[/dim]\n"
-                )
-                config.target.endpoint = captured
+    if (
+        auth_manager
+        and config.auth.auth_type == "browser"
+        and hasattr(auth_manager, "_browser_session")
+        and auth_manager._browser_session
+        and auth_manager._browser_session.chat_endpoint
+    ):
+        config.target.endpoint = (
+            auth_manager._browser_session.chat_endpoint
+        )
+        scan_evidence.target = config.target.endpoint
+        console.print(
+            f"[green]✓ Target endpoint captured: "
+            f"{config.target.endpoint}[/green]"
+        )
 
     with Progress(
         SpinnerColumn(),

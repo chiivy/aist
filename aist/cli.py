@@ -543,7 +543,9 @@ def main():
     "--target", "-t",
     default=None,
     help="Target agent endpoint URL. "
-         "Omit to launch interactive setup wizard."
+         "Omit to launch interactive setup wizard, "
+         "or when using --auth-type browser to capture "
+         "the endpoint from your browser session."
 )
 @click.option(
     "--tools", "-T",
@@ -739,7 +741,7 @@ def scan(
     wizard_goals = None
     wizard_app_context = None
 
-    if target is None:
+    if target is None and auth_type != "browser":
         wizard = run_interactive_wizard()
         if not wizard.get("proceed", False):
             sys.exit(0)
@@ -764,6 +766,14 @@ def scan(
         wizard_body_fields = wizard.get("custom_body_fields")
         wizard_custom_headers = wizard.get("custom_headers")
         wizard_response_field = wizard.get("response_field")
+    elif target is None and auth_type == "browser":
+        console.print(
+            "\n[bold]Browser authentication mode[/bold]"
+        )
+        console.print(
+            "[dim]Target endpoint will be captured from "
+            "your browser session after login.[/dim]\n"
+        )
 
     if expose_evidence:
         expose_evidence = confirm_expose_evidence()
@@ -787,13 +797,19 @@ def scan(
             "%Y-%m-%d-%H-%M"
         )
         safe_target = re.sub(
-            r'[^\w]', '-', target
+            r'[^\w]', '-', target or "browser-captured"
         )[:30].strip("-")
         output = (
             f"reports/aist-{timestamp}-{safe_target}.html"
         )
 
-    console.print(f"\n[bold]Target:[/bold] {target}")
+    if target:
+        console.print(f"\n[bold]Target:[/bold] {target}")
+    else:
+        console.print(
+            "\n[bold]Target:[/bold] "
+            "[dim](captured from browser session)[/dim]"
+        )
     console.print(
         f"[bold]Tools declared:[/bold] "
         f"{', '.join(tools_list) if tools_list else 'none'}"
@@ -853,7 +869,7 @@ def scan(
     config.auth.client_id = auth_client_id
     if auth_type == "browser":
         config.auth.browser_target_url = (
-            auth_login_url or target
+            auth_login_url or target or ""
         )
     if auth_cookie_value:
         config.auth.cookie_name = auth_cookie_name or "session"
