@@ -704,6 +704,30 @@ def main():
          "to fuel levels for 2000+ sites. "
          'Should only show data for authorised sites."',
 )
+@click.option(
+    "--reuse-session",
+    is_flag=True,
+    default=False,
+    help="Reuse the last saved browser session "
+         "without opening a new browser window. "
+         "Session must not have expired.",
+)
+@click.option(
+    "--session-file",
+    default=".aist_session.json",
+    help="Path to saved session file. "
+         "Default: .aist_session.json",
+)
+@click.option(
+    "--ai-review",
+    is_flag=True,
+    default=False,
+    help="Generate a sanitised AI review report "
+         "alongside the main report. Masks emails, "
+         "tokens, names, and internal IPs. Safe "
+         "for sharing with AI assistants or "
+         "third-party reviewers.",
+)
 def scan(
     target, tools, output, mode, runs,
     log_level, siem, expose_evidence,
@@ -713,6 +737,7 @@ def scan(
     auth_tenant_id, auth_client_id, safe_mode,
     message_field, body_fields, custom_headers,
     response_field, no_followup, app_context,
+    reuse_session, session_file, ai_review,
 ):
     """
     Run a full injection security scan against
@@ -871,6 +896,12 @@ def scan(
         config.auth.browser_target_url = (
             auth_login_url or target or ""
         )
+
+    if reuse_session:
+        config.auth.reuse_session = True
+        config.auth.session_file = session_file
+        config.auth.auth_type = "browser"
+
     if auth_cookie_value:
         config.auth.cookie_name = auth_cookie_name or "session"
         config.auth.cookie_value = auth_cookie_value
@@ -878,6 +909,9 @@ def scan(
 
     if no_followup:
         config.scan.followup_enabled = False
+
+    if ai_review:
+        config.scan.ai_review_mode = True
 
     effective_app_context = app_context or wizard_app_context
     if effective_app_context:

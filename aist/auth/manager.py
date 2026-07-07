@@ -43,6 +43,8 @@ class AuthConfig:
     token_expiry: Optional[int] = None
     browser_target_url: str = ""
     browser_session: Optional[Any] = None
+    reuse_session: bool = False
+    session_file: str = ".aist_session.json"
 
 
 class AuthManager:
@@ -141,6 +143,40 @@ class AuthManager:
             target.custom_body_fields = dict(
                 session.extra_body_fields
             )
+
+    async def load_saved_session(
+        self,
+        filepath: str = ".aist_session.json",
+    ) -> bool:
+        """Load a previously saved browser session from disk."""
+        from aist.auth.browser import load_session
+
+        session = await load_session(filepath)
+        if not session:
+            return False
+
+        if session.headers:
+            self._browser_headers = dict(session.headers)
+            auth_header = (
+                session.headers.get("authorization")
+                or session.headers.get("Authorization")
+            )
+            if auth_header:
+                self._token = auth_header
+                if auth_header.lower().startswith("bearer "):
+                    self.config.header_name = "Authorization"
+
+        if session.cookies:
+            self._cookies = {
+                cookie["name"]: cookie["value"]
+                for cookie in session.cookies
+                if isinstance(cookie, dict)
+            }
+
+        self._browser_session = session
+        self.config.browser_session = session
+        self.apply_browser_session_to_target()
+        return True
 
     def is_token_expired(self) -> bool:
         """Check if token is expired or expiring soon."""
@@ -275,7 +311,37 @@ class AuthManager:
         Launch a browser for interactive login and
         capture session cookies, headers, and format.
         """
+        from rich.console import Console
+
         from aist.auth.browser import capture_browser_session
+
+        console = Console()
+
+        if self.config.reuse_session:
+            if await self.load_saved_session(
+                self.config.session_file
+            ):
+                console.print(
+                    "[green]✓ Reusing saved session[/green]"
+                )
+                if self._browser_session:
+                    log.info(
+                        "browser_auth_success",
+                        endpoint=(
+                            self._browser_session.chat_endpoint
+                        ),
+                        cookies=len(self._cookies),
+                        headers=list(
+                            self._browser_headers.keys()
+                        ),
+                    )
+                return True
+
+            console.print(
+                "[yellow]Saved session expired or "
+                "not found. Launching browser "
+                "for re-authentication.[/yellow]"
+            )
 
         url = (
             self.config.browser_target_url
@@ -291,7 +357,10 @@ class AuthManager:
             )
             return False
 
-        session = await capture_browser_session(url)
+        session = await capture_browser_session(
+            url,
+            session_file=self.config.session_file,
+        )
 
         if not session:
             return False

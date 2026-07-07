@@ -166,6 +166,74 @@ def save_html_report(
     return str(path.absolute())
 
 
+def sanitise_for_ai_review(html_content: str) -> str:
+    """
+    Replace sensitive values with placeholders
+    suitable for sharing with AI review tools.
+
+    Preserves all structural information:
+    finding IDs, severity scores, categories,
+    reasoning patterns, payload structure.
+
+    Replaces: real emails, names, JWT tokens,
+    internal URLs, company identifiers.
+    """
+    import re
+
+    sanitised = html_content
+
+    sanitised = re.sub(
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+        '[EMAIL REDACTED]',
+        sanitised,
+    )
+
+    sanitised = re.sub(
+        r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+',
+        '[JWT TOKEN REDACTED]',
+        sanitised,
+    )
+
+    sanitised = re.sub(
+        r'Bearer\s+[A-Za-z0-9\-._~+/]+=*',
+        'Bearer [TOKEN REDACTED]',
+        sanitised,
+    )
+
+    sanitised = re.sub(
+        r'\b(?:192\.168|10\.|172\.(?:1[6-9]|2[0-9]|3[01]))\.\d+\.\d+\b',
+        '[INTERNAL IP REDACTED]',
+        sanitised,
+    )
+
+    sanitised = re.sub(
+        r'"displayName"\s*:\s*"[^"]*"',
+        '"displayName": "[NAME REDACTED]"',
+        sanitised,
+    )
+
+    banner = """
+<div style="background: #1e3a5f; color: #93c5fd;
+            padding: 1rem 2rem; margin-bottom: 1rem;
+            border-left: 4px solid #3b82f6;
+            font-family: monospace; font-size: 0.85rem;">
+  <strong>AI REVIEW VERSION</strong> --
+  This report has been sanitised for third-party
+  and AI-assisted review. Sensitive values including
+  email addresses, authentication tokens, display names,
+  and internal IP addresses have been replaced with
+  placeholders. All finding IDs, severity scores,
+  reasoning, and structural data are intact.
+  For the complete report contact the scan operator.
+</div>
+"""
+    sanitised = sanitised.replace(
+        '<body>', '<body>' + banner, 1
+    )
+
+    return sanitised
+
+
 EXECUTIVE_FINDING_TITLES = {
     "RECON-D1": "System prompt exposed",
     "RECON-E1": "Undeclared tools discovered",

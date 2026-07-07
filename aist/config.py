@@ -68,6 +68,7 @@ class ScanConfig:
     safe_mode: bool = False
     max_followup_depth: int = 3
     followup_enabled: bool = True
+    ai_review_mode: bool = False
 
 
 @dataclass
@@ -308,6 +309,10 @@ def load_config(
         os.getenv(
             "AIST_FOLLOWUP_ENABLED", "true"
         ).lower() == "true"
+    )
+    config.scan.ai_review_mode = (
+        os.getenv("AIST_AI_REVIEW", "false").lower()
+        == "true"
     )
 
     # Jitter settings

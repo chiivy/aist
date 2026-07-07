@@ -71,6 +71,7 @@ from aist.reporting.html import (
     generate_html_report,
     generate_executive_html_report,
     save_html_report,
+    sanitise_for_ai_review,
 )
 from aist.reporting.json_report import (
     generate_json_report,
@@ -725,6 +726,17 @@ async def run_full_scan(
         )
         html_path = save_html_report(html, output_path)
         progress.advance(report_task)
+
+        ai_review_path = None
+        if config.scan.ai_review_mode:
+            sanitised_html = sanitise_for_ai_review(html)
+            ai_review_path = output_path.replace(
+                ".html", "-ai-review.html"
+            )
+            save_html_report(sanitised_html, ai_review_path)
+            console.print(
+                f"  AI Review: {ai_review_path}"
+            )
 
         executive_path = output_path.replace(
             ".html", "-executive.html"

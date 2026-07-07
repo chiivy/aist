@@ -20,12 +20,17 @@ of the scan.
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+import httpx
 
 from aist.logger import get_logger
 
 log = get_logger(__name__)
+
+DEFAULT_SESSION_FILE = ".aist_session.json"
 
 _MESSAGE_FIELD_CANDIDATES = (
     "message",
@@ -49,6 +54,24 @@ _CHAT_URL_KEYWORDS = (
     "assist",
     "stream",
     "api",
+)
+
+_AUTH_URL_KEYWORDS = (
+    "login",
+    "auth",
+    "token",
+    "signin",
+    "session",
+    "authenticate",
+    "oauth",
+    "callback",
+    "refresh",
+)
+
+_AUTH_RESPONSE_PATTERNS = (
+    "authentication successful",
+    "access_token",
+    "authentication_token",
 )
 
 
@@ -79,18 +102,278 @@ def _detect_message_field(body: dict) -> str:
     return "message"
 
 
+def _is_auth_url(url: str) -> bool:
+    """Return True if the URL looks like an auth endpoint."""
+    lower = url.lower()
+    return any(keyword in lower for keyword in _AUTH_URL_KEYWORDS)
+
+
+def _is_auth_response(
+    response_text: str,
+    request_body: Optional[dict] = None,
+) -> bool:
+    """Return True if the response looks like an auth response."""
+    lower = response_text.lower()
+    if any(pattern in lower for pattern in _AUTH_RESPONSE_PATTERNS):
+        return True
+
+    try:
+        data = json.loads(response_text)
+        if isinstance(data, dict):
+            keys = {str(key).lower() for key in data.keys()}
+            if (
+                "token" in keys
+                and "email" in keys
+                and "role" in keys
+            ):
+                return True
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return False
+
+
+def _cookies_to_dict(cookies: list) -> dict[str, str]:
+    """Convert Playwright cookie list to a dict for httpx."""
+    result: dict[str, str] = {}
+    for cookie in cookies:
+        if isinstance(cookie, dict) and cookie.get("name"):
+            result[cookie["name"]] = cookie["value"]
+    return result
+
+
+async def verify_chat_endpoint(
+    url: str,
+    headers: dict,
+    cookies: dict,
+    body_template: dict,
+    message_field: str = "message",
+) -> tuple[Optional[bool], str]:
+    """
+    Send a simple test message to the captured
+    endpoint and verify it responds like a chat
+    interface not an auth endpoint.
+
+    Returns (is_valid, response_preview) where
+    is_valid is True, False, or None if ambiguous.
+    """
+    test_body = dict(body_template)
+    test_body[message_field] = "hello"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=test_body,
+                headers=headers,
+                cookies=cookies,
+                timeout=15,
+            )
+
+            body = response.text[:500]
+
+            auth_signals = [
+                "authentication successful",
+                "access_token",
+                "signin",
+                "bearer",
+            ]
+            if any(
+                signal in body.lower()
+                for signal in auth_signals
+            ):
+                return False, body[:100]
+
+            chat_signals = [
+                "data:",
+                "response",
+                "message",
+                "answer",
+                "hello",
+                "help",
+                "assist",
+            ]
+            if any(
+                signal in body.lower()
+                for signal in chat_signals
+            ):
+                return True, body[:100]
+
+            return None, body[:100]
+
+    except Exception as exc:
+        return False, str(exc)
+
+
+async def save_session(
+    session: BrowserSession,
+    filepath: str = DEFAULT_SESSION_FILE,
+) -> bool:
+    """
+    Save captured browser session to disk
+    for reuse within the token expiry window.
+
+    Saves: cookies, headers, body format,
+    endpoint, expiry estimate.
+
+    File is saved in the current directory.
+    """
+    session_data = {
+        "captured_at": time.time(),
+        "expires_estimate": time.time() + 7200,
+        "chat_endpoint": session.chat_endpoint,
+        "message_field": session.message_field,
+        "extra_body_fields": session.extra_body_fields,
+        "headers": session.headers,
+        "cookies": session.cookies,
+        "base_url": session.base_url,
+    }
+
+    try:
+        with open(filepath, "w", encoding="utf-8") as handle:
+            json.dump(session_data, handle, indent=2)
+        return True
+    except Exception as exc:
+        log.warning("session_save_error", error=str(exc))
+        return False
+
+
+async def load_session(
+    filepath: str = DEFAULT_SESSION_FILE,
+) -> Optional[BrowserSession]:
+    """
+    Load a previously saved browser session.
+    Returns None if session file does not exist
+    or session has expired.
+    """
+    try:
+        with open(filepath, encoding="utf-8") as handle:
+            data = json.load(handle)
+
+        expires = data.get("expires_estimate", 0)
+        if time.time() > expires:
+            log.info(
+                "session_expired",
+                message="Saved session has expired. "
+                        "Re-authentication required.",
+            )
+            return None
+
+        session = BrowserSession(
+            chat_endpoint=data["chat_endpoint"],
+            message_field=data.get("message_field", "message"),
+            extra_body_fields=data.get("extra_body_fields", {}),
+            headers=data.get("headers", {}),
+            cookies=data.get("cookies", []),
+            base_url=data.get("base_url", ""),
+        )
+
+        remaining = int((expires - time.time()) / 60)
+        log.info(
+            "session_loaded",
+            endpoint=session.chat_endpoint,
+            expires_in_minutes=remaining,
+        )
+
+        return session
+
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log.warning("session_load_error", error=str(exc))
+        return None
+
+
+def _build_session_from_candidate(
+    candidate: dict,
+    cookies: list,
+    base_url: str,
+) -> BrowserSession:
+    """Build a BrowserSession from a verified capture candidate."""
+    session = BrowserSession(base_url=base_url)
+    session.cookies = cookies
+    session.chat_endpoint = candidate["url"]
+    session.request_format = candidate["body"]
+
+    auth_headers = {
+        key: value
+        for key, value in candidate["headers"].items()
+        if key.lower() in _AUTH_HEADER_KEYS
+    }
+    session.headers = auth_headers
+
+    body = candidate["body"]
+    session.message_field = _detect_message_field(body)
+    session.extra_body_fields = {
+        key: value
+        for key, value in body.items()
+        if key != session.message_field
+    }
+
+    return session
+
+
+async def _select_verified_endpoint(
+    captured_requests: list,
+    cookies: list,
+    console,
+) -> Optional[dict]:
+    """Verify captured requests and return the best chat endpoint."""
+    import click
+
+    cookie_dict = _cookies_to_dict(cookies)
+
+    for candidate in reversed(captured_requests):
+        message_field = _detect_message_field(candidate["body"])
+        is_valid, preview = await verify_chat_endpoint(
+            url=candidate["url"],
+            headers=candidate["headers"],
+            cookies=cookie_dict,
+            body_template=candidate["body"],
+            message_field=message_field,
+        )
+
+        if is_valid is True:
+            log.info(
+                "chat_endpoint_verified",
+                url=candidate["url"],
+            )
+            return candidate
+
+        if is_valid is False:
+            log.info(
+                "chat_endpoint_rejected",
+                url=candidate["url"],
+                reason="verification_failed",
+            )
+            continue
+
+        console.print(f"""
+[yellow]Ambiguous endpoint captured:[/yellow]
+  URL: {candidate["url"]}
+  Response preview: {preview}
+
+Does this look like a chat interface response?
+""")
+        if click.confirm("Use this endpoint?", default=True):
+            return candidate
+
+    return None
+
+
 async def capture_browser_session(
     target_url: str,
     headless: bool = False,
+    session_file: str = DEFAULT_SESSION_FILE,
 ) -> Optional[BrowserSession]:
     """
     Launch a browser for the user to log in.
     Captures the session after login completes.
 
     Args:
-        target_url: The app URL to open
-        headless:   False = visible browser (default)
-                    True = hidden (for CI/CD)
+        target_url:   The app URL to open
+        headless:     False = visible browser (default)
+        session_file: Path to save session for reuse
 
     Returns:
         BrowserSession with captured auth data
@@ -138,11 +421,13 @@ AIST will capture your session automatically.
 
         page = await context.new_page()
 
-        async def handle_request(request) -> None:
-            url = request.url
-            method = request.method
+        async def handle_response(response) -> None:
+            request = response.request
+            if request.method != "POST":
+                return
 
-            if method != "POST":
+            url = request.url
+            if _is_auth_url(url):
                 return
 
             if not any(
@@ -152,26 +437,40 @@ AIST will capture your session automatically.
                 return
 
             try:
-                body = request.post_data
-                if not body:
+                post_data = request.post_data
+                if not post_data:
                     return
-                body_json = json.loads(body)
-                captured_requests.append({
-                    "url": url,
-                    "headers": dict(request.headers),
-                    "body": body_json,
-                })
-                log.info(
-                    "chat_request_captured",
-                    url=url,
-                    fields=list(body_json.keys()),
-                )
+                body_json = json.loads(post_data)
             except json.JSONDecodeError:
-                pass
+                return
             except Exception:
-                pass
+                return
 
-        page.on("request", handle_request)
+            try:
+                response_text = await response.text()
+            except Exception:
+                response_text = ""
+
+            if _is_auth_response(response_text, body_json):
+                log.info(
+                    "auth_response_skipped",
+                    url=url,
+                )
+                return
+
+            captured_requests.append({
+                "url": url,
+                "headers": dict(request.headers),
+                "body": body_json,
+                "response_preview": response_text[:200],
+            })
+            log.info(
+                "chat_request_captured",
+                url=url,
+                fields=list(body_json.keys()),
+            )
+
+        page.on("response", handle_response)
 
         await page.goto(target_url)
 
@@ -192,34 +491,35 @@ AIST will capture your session automatically.
         session.storage_state = storage
 
         if captured_requests:
-            latest = captured_requests[-1]
+            verified = await _select_verified_endpoint(
+                captured_requests,
+                cookies,
+                console,
+            )
 
-            session.chat_endpoint = latest["url"]
-            session.request_format = latest["body"]
+            if not verified:
+                console.print(
+                    "[yellow]No verified chat endpoint found. "
+                    "Captured requests may be auth endpoints. "
+                    "Try sending a message in the chat UI.[/yellow]"
+                )
+                await browser.close()
+                return None
 
-            auth_headers = {
-                key: value
-                for key, value in latest["headers"].items()
-                if key.lower() in _AUTH_HEADER_KEYS
-            }
-            session.headers = auth_headers
-
-            body = latest["body"]
-            session.message_field = _detect_message_field(body)
-            session.extra_body_fields = {
-                key: value
-                for key, value in body.items()
-                if key != session.message_field
-            }
+            session = _build_session_from_candidate(
+                verified,
+                cookies,
+                target_url,
+            )
 
             console.print(f"""
-[green]✓ Session captured successfully[/green]
+[green]✓ Chat endpoint verified:[/green]
+  {session.chat_endpoint}
 
-  Chat endpoint: {session.chat_endpoint}
-  Message field: {session.message_field}
-  Extra fields:  {list(session.extra_body_fields.keys())}
-  Auth headers:  {list(auth_headers.keys())}
-  Cookies:       {len(cookies)} captured
+[green]✓ Message field:[/green] {session.message_field}
+[green]✓ Extra body fields:[/green] {list(session.extra_body_fields.keys())}
+[green]✓ Auth headers:[/green] {list(session.headers.keys())}
+[green]✓ Cookies captured:[/green] {len(cookies)}
 """)
         else:
             console.print(
@@ -227,8 +527,17 @@ AIST will capture your session automatically.
                 "Make sure you sent a message "
                 "in the chat interface.[/yellow]"
             )
+            await browser.close()
+            return None
 
         await browser.close()
+
+    if session.chat_endpoint:
+        await save_session(session, session_file)
+        console.print(
+            "[dim]Session saved. Reuse with "
+            "--reuse-session within 2 hours.[/dim]"
+        )
 
     return session if session.chat_endpoint else None
 
