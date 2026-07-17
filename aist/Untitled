@@ -1,0 +1,3 @@
+LLM_PROVIDER=openrouter
+LLM_MODEL=mistralai/mistral-7b-instruct:free
+OPENROUTER_API_KEY=sk-or-...your key...
