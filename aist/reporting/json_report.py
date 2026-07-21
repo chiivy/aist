@@ -24,6 +24,10 @@ from aist.compliance.mappings import (
 from aist.remediation.generic import get_generic_guidance
 from aist.evidence.masking import mask_for_report
 from aist.evidence.collector import is_genuine_finding
+from aist.reporting.objectives import (
+    map_findings_to_objectives,
+    objectives_for_json,
+)
 
 log = get_logger(__name__)
 
@@ -73,6 +77,9 @@ def generate_json_report(
     )
 
     summary = _build_summary(findings, scan_evidence)
+    attacker_objectives = objectives_for_json(
+        map_findings_to_objectives(findings)
+    )
 
     finding_categories = [
         f["payload_category"]
@@ -121,6 +128,7 @@ def generate_json_report(
         "target": scan_evidence.target,
         "contains_sensitive_values": expose,
         "summary": summary,
+        "attacker_objectives": attacker_objectives,
         "attack_surface": attack_surface,
         "findings": findings,
         "infrastructure": {

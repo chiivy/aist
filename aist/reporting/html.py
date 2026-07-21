@@ -39,6 +39,7 @@ from aist.scan_profiles import (
     get_profile_spec,
     get_testing_summary,
 )
+from aist.reporting.objectives import map_findings_to_objectives
 
 log = get_logger(__name__)
 console = Console()
@@ -95,6 +96,7 @@ def generate_html_report(
 
     # Calculate summary stats (confirmed findings only)
     summary = _build_summary(findings, scan_evidence)
+    attacker_objectives = map_findings_to_objectives(findings)
 
     # Build compliance summary
     finding_categories = [
@@ -139,6 +141,7 @@ def generate_html_report(
     html = _render_template(
         findings=display_findings,
         unvalidated_findings=unvalidated_findings,
+        attacker_objectives=attacker_objectives,
         summary=summary,
         attack_surface=attack_surface,
         compliance_summary=compliance_summary,
@@ -560,6 +563,7 @@ def generate_executive_html_report(
         scan_completed_at=scan_completed_at,
     )
     summary = _build_summary(findings, scan_evidence)
+    attacker_objectives = map_findings_to_objectives(findings)
     gauge_color = _score_to_gauge_color(summary["overall_score"])
     risk_gauge_svg = _build_risk_gauge_svg(
         summary["overall_score"],
@@ -619,6 +623,7 @@ def generate_executive_html_report(
         risk_gauge_svg=risk_gauge_svg,
         summary_sentence=summary_sentence,
         artifacts_sentence=artifacts_sentence,
+        attacker_objectives=attacker_objectives,
         top_findings=top_findings,
         owasp_violations=compliance.get(
             "owasp_violations", []
@@ -721,6 +726,24 @@ EXECUTIVE_HTML_TEMPLATE = """<!DOCTYPE html>
   .sev-High { background: #ffedd5; color: #9a3412; }
   .sev-Medium { background: #fef9c3; color: #854d0e; }
   .sev-Low { background: #dcfce7; color: #166534; }
+  .objective-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    border-left: 4px solid #94a3b8;
+  }
+  .objective-card.objective-critical { border-left-color: #dc2626; }
+  .objective-card.objective-high { border-left-color: #ea580c; }
+  .objective-card.objective-medium { border-left-color: #ca8a04; }
+  .objective-card.objective-low { border-left-color: #16a34a; }
+  .objective-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
   ul { margin-left: 1.5rem; }
   li { margin-bottom: 0.65rem; }
   .compliance-list { list-style: none; margin-left: 0; }
@@ -774,7 +797,30 @@ EXECUTIVE_HTML_TEMPLATE = """<!DOCTYPE html>
   would have.
 </div>
 
-<h2>Top Findings</h2>
+{% if attacker_objectives %}
+<h2>What an Attacker Can Achieve</h2>
+{% for objective in attacker_objectives %}
+<div class="objective-card objective-{{ objective.severity | lower }}">
+  <div class="objective-header">
+    <span class="sev sev-{{ objective.severity }}">
+      {{ objective.severity | upper }}
+    </span>
+    <strong>{{ objective.name }}</strong>
+  </div>
+  <p>{{ objective.description }}</p>
+  <p><strong>Business Impact:</strong>
+    {{ objective.business_impact }}</p>
+  <p><strong>OWASP:</strong> {{ objective.owasp }}</p>
+  <p><strong>Supported by:</strong>
+    {{ objective.supporting_findings | join(', ') }}
+    ({{ objective.finding_count }}
+    finding{{ 's' if objective.finding_count != 1 else '' }})
+  </p>
+</div>
+{% endfor %}
+{% endif %}
+
+<h2>Key Findings Summary</h2>
 {% if top_findings %}
 <table>
   <thead>
@@ -1490,6 +1536,7 @@ def _render_template(
     infrastructure_findings: list = None,
     infrastructure_summary: dict = None,
     unvalidated_findings: list = None,
+    attacker_objectives: list = None,
     adaptive_recon: dict = None,
     multiturn_narratives: list = None,
     silent_findings: list = None,
@@ -1507,6 +1554,7 @@ def _render_template(
     return template.render(
         findings=findings,
         unvalidated_findings=unvalidated_findings or [],
+        attacker_objectives=attacker_objectives or [],
         summary=summary,
         attack_surface=attack_surface,
         compliance_summary=compliance_summary,
@@ -1959,6 +2007,47 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     background: #14532d;
     color: #86efac;
     border: 1px solid #22c55e;
+  }
+
+  .objective-report-card {
+    background: #1a1f2e;
+    border: 1px solid #2d3748;
+    border-left: 4px solid #64748b;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.25rem;
+  }
+  .objective-report-card.objective-critical {
+    border-left-color: #ef4444;
+  }
+  .objective-report-card.objective-high {
+    border-left-color: #f97316;
+  }
+  .objective-report-card.objective-medium {
+    border-left-color: #eab308;
+  }
+  .objective-report-card.objective-low {
+    border-left-color: #22c55e;
+  }
+  .objective-report-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .objective-report-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #f8fafc;
+  }
+  .objective-report-description {
+    color: #cbd5e1;
+    margin-bottom: 0.75rem;
+  }
+  .objective-report-meta {
+    color: #94a3b8;
+    font-size: 0.9rem;
+    margin-bottom: 0.35rem;
   }
 
   .finding-id {
@@ -3080,6 +3169,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         {{ finding.manual_review_prompt }}
       </p>
     </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <!-- Attacker Objectives -->
+  {% if attacker_objectives %}
+  <div class="section-title">What an Attacker Can Achieve</div>
+  {% for objective in attacker_objectives %}
+  <div class="objective-report-card objective-{{ objective.severity | lower }}">
+    <div class="objective-report-header">
+      <span class="severity-badge badge-{{ objective.severity | lower }}">
+        {{ objective.severity | upper }}
+      </span>
+      <h3 class="objective-report-title">{{ objective.name }}</h3>
+    </div>
+    <p class="objective-report-description">{{ objective.description }}</p>
+    <p class="objective-report-meta">
+      <strong>Business Impact:</strong>
+      {{ objective.business_impact }}
+    </p>
+    <p class="objective-report-meta">
+      <strong>OWASP:</strong> {{ objective.owasp }}
+    </p>
+    <p class="objective-report-meta">
+      <strong>Supported by:</strong>
+      {{ objective.supporting_findings | join(', ') }}
+      ({{ objective.finding_count }}
+      finding{{ 's' if objective.finding_count != 1 else '' }})
+    </p>
   </div>
   {% endfor %}
   {% endif %}
