@@ -69,6 +69,9 @@ class ScanConfig:
     max_followup_depth: int = 3
     followup_enabled: bool = True
     redacted_mode: bool = False
+    local_judge: bool = False
+    local_judge_url: str = "http://localhost:11434"
+    local_judge_model: str = "llama3.1:8b"
 
 
 @dataclass
@@ -319,6 +322,18 @@ def load_config(
             os.getenv("AIST_AI_REVIEW", "false"),
         ).lower()
         == "true"
+    )
+    config.scan.local_judge = (
+        os.getenv("AIST_LOCAL_JUDGE", "false").lower()
+        == "true"
+    )
+    config.scan.local_judge_url = os.getenv(
+        "AIST_LOCAL_JUDGE_URL",
+        "http://localhost:11434",
+    )
+    config.scan.local_judge_model = os.getenv(
+        "AIST_LOCAL_JUDGE_MODEL",
+        "llama3.1:8b",
     )
 
     # Jitter settings

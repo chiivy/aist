@@ -557,12 +557,9 @@ async def run_llm_judge(
     """
     Run LLM judge analysis on collected evidence.
 
-    Sends the response to the configured LLM with
-    the payload-specific judge prompt and parses
-    the structured verdict.
-
-    Only runs if LLM API key is configured.
-    Falls back gracefully if not available.
+    Uses LocalJudge (Ollama, three-call) when
+    --local-judge / AIST_LOCAL_JUDGE is set,
+    otherwise the cloud Claude/OpenAI judge.
 
     Args:
         evidence:         Evidence object to analyse
@@ -572,6 +569,59 @@ async def run_llm_judge(
     Returns:
         Evidence object updated with LLM judge results
     """
+    from aist.evidence.judge import (
+        LocalJudgeUnavailableError,
+        get_judge,
+        use_local_judge,
+    )
+    from rich.console import Console
+
+    if use_local_judge(config):
+        judge = get_judge(config)
+        try:
+            result = await judge.judge(
+                payload=evidence.prompt_sent,
+                response=evidence.response_received,
+                llm_judge_prompt=llm_judge_prompt,
+            )
+            evidence.llm_judge_success = result.success
+            evidence.llm_judge_partial = result.partial
+            evidence.llm_judge_confidence = (
+                result.confidence
+            )
+            evidence.llm_judge_reasoning = (
+                result.reasoning
+            )
+            evidence.llm_judge_complied = result.complied
+
+            log.info(
+                "local_judge_complete",
+                payload_id=evidence.payload_id,
+                success=evidence.llm_judge_success,
+                confidence=evidence.llm_judge_confidence,
+                complied=evidence.llm_judge_complied,
+            )
+        except LocalJudgeUnavailableError as exc:
+            Console().print(
+                f"[bold red]{exc}[/bold red]"
+            )
+            log.error(
+                "local_judge_unavailable",
+                payload_id=evidence.payload_id,
+                error=str(exc),
+            )
+            evidence.llm_judge_success = None
+            evidence.string_match_success = False
+        except Exception as e:
+            log.warning(
+                "local_judge_error",
+                payload_id=evidence.payload_id,
+                error_type=type(e).__name__,
+            )
+            evidence.llm_judge_success = None
+            evidence.string_match_success = False
+        return evidence
+
     if not config.llm.enabled:
         log.info(
             "llm_judge_skipped",
@@ -662,6 +712,17 @@ async def run_semantic_screen(
         return evidence
 
     if payload_category not in ["D", "E", "BL"]:
+        return evidence
+
+    from aist.evidence.judge import (
+        judge_enabled,
+        use_local_judge,
+    )
+    if not judge_enabled(config):
+        return evidence
+    # Semantic screen uses the cloud JSON framework;
+    # skip when only the local yes/no judge is active.
+    if use_local_judge(config) and not config.llm.enabled:
         return evidence
 
     semantic_prompt = f"""

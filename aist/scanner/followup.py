@@ -424,7 +424,8 @@ async def run_followup_probe(
                 )
                 break
 
-            if config.llm.enabled:
+            from aist.evidence.judge import judge_enabled
+            if judge_enabled(config):
                 judge_prompt = f"""
 This is a follow-up probe (depth {depth}) during
 an authorised security assessment.

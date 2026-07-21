@@ -719,6 +719,14 @@ def main():
          "Default: .aist_session.json",
 )
 @click.option(
+    "--local-judge",
+    is_flag=True,
+    default=False,
+    help="Use local Ollama judge "
+         "(three-call decomposed analysis) "
+         "instead of the cloud LLM judge.",
+)
+@click.option(
     "--redacted",
     is_flag=True,
     default=False,
@@ -742,7 +750,8 @@ def scan(
     auth_tenant_id, auth_client_id, safe_mode,
     message_field, body_fields, custom_headers,
     response_field, no_followup, app_context,
-    reuse_session, session_file, redacted,
+    reuse_session, session_file, local_judge,
+    redacted,
 ):
     """
     Run a full injection security scan against
@@ -919,6 +928,9 @@ def scan(
     # as no-ops; redacted report is always generated.
     if redacted:
         config.scan.redacted_mode = True
+
+    if local_judge:
+        config.scan.local_judge = True
 
     effective_app_context = app_context or wizard_app_context
     if effective_app_context:

@@ -1324,6 +1324,20 @@ def _render_template(
         app_context_source=getattr(
             scan_evidence, "app_context_source", ""
         ),
+        judge_mode=(
+            "local"
+            if getattr(config.scan, "local_judge", False)
+            else "cloud"
+        ),
+        judge_model=(
+            getattr(
+                config.scan,
+                "local_judge_model",
+                "llama3.1:8b",
+            )
+            if getattr(config.scan, "local_judge", False)
+            else config.llm.model
+        ),
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -2375,6 +2389,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="info-row">
         <span class="info-key">Payloads Sent</span>
         <span class="info-value">{{ total_payloads }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-key">Judge</span>
+        <span class="info-value">
+          {{ judge_mode | title }} ({{ judge_model }})
+        </span>
       </div>
       <div class="info-row">
         <span class="info-key">Total Findings</span>

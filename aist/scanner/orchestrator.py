@@ -892,6 +892,7 @@ async def run_full_scan(
         infrastructure_issues=len(
             scan_evidence.infrastructure_findings
         ),
+        config=config,
     )
 
     infra_findings_out = [
@@ -1121,6 +1122,7 @@ def _print_scan_summary(
     redacted_path,
     duration,
     infrastructure_issues: int = 0,
+    config: Optional[AISTConfig] = None,
 ) -> None:
     """
     Print final scan summary to console.
@@ -1146,10 +1148,31 @@ def _print_scan_summary(
         if s.severity_label == "Low"
     )
 
+    judge_line = ""
+    if config is not None:
+        from aist.evidence.judge import get_judge_metadata
+
+        meta = get_judge_metadata(config)
+        if meta["judge_mode"] == "local":
+            judge_line = (
+                f"\n[bold]Judge:[/bold] Local "
+                f"({meta['judge_model']})\n"
+            )
+        else:
+            short = meta.get(
+                "judge_model_short",
+                meta["judge_model"],
+            )
+            judge_line = (
+                f"\n[bold]Judge:[/bold] Claude "
+                f"({short})\n"
+            )
+
     console.print(
         Panel.fit(
             f"[bold]Scan Complete[/bold] "
-            f"in {round(duration, 1)}s\n\n"
+            f"in {round(duration, 1)}s\n"
+            f"{judge_line}\n"
             f"[bold]AI Security Findings:[/bold]\n"
             f"[red]Critical: {critical}[/red]  "
             f"[orange1]High: {high}[/orange1]  "

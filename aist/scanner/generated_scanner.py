@@ -87,7 +87,8 @@ async def run_generated_scanner(
 
             judge_prompt = _build_gen_judge_prompt(gen_payload)
 
-            if config.llm.enabled:
+            from aist.evidence.judge import judge_enabled
+            if judge_enabled(config):
                 evidence = await run_llm_judge(
                     evidence=evidence,
                     llm_judge_prompt=judge_prompt,

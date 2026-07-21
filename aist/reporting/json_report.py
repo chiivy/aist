@@ -139,7 +139,30 @@ def generate_json_report(
             "errors": scan_evidence.errors,
             "mode": config.target.mode,
             "tools_declared": config.target.tools,
-            "llm_judge_enabled": config.llm.enabled,
+            "llm_judge_enabled": (
+                config.llm.enabled
+                or getattr(
+                    config.scan, "local_judge", False
+                )
+            ),
+            "judge_mode": (
+                "local"
+                if getattr(
+                    config.scan, "local_judge", False
+                )
+                else "cloud"
+            ),
+            "judge_model": (
+                getattr(
+                    config.scan,
+                    "local_judge_model",
+                    "llama3.1:8b",
+                )
+                if getattr(
+                    config.scan, "local_judge", False
+                )
+                else config.llm.model
+            ),
             "canary_enabled": config.canary.enabled,
             "app_context": config.target.app_context or "",
             "app_context_source": getattr(

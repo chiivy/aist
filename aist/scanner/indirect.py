@@ -423,12 +423,14 @@ async def run_indirect_scanner(
                     config=config,
                 )
 
-                if config.llm.enabled and llm_judge_prompt:
-                    evidence = await run_llm_judge(
-                        evidence=evidence,
-                        llm_judge_prompt=llm_judge_prompt,
-                        config=config,
-                    )
+                if llm_judge_prompt:
+                    from aist.evidence.judge import judge_enabled
+                    if judge_enabled(config):
+                        evidence = await run_llm_judge(
+                            evidence=evidence,
+                            llm_judge_prompt=llm_judge_prompt,
+                            config=config,
+                        )
 
                 evidence_items.append(evidence)
 
