@@ -391,6 +391,39 @@ GENERIC_GUIDANCE = {
             "https://genai.owasp.org/llmrisk/llm01-prompt-injection/",
         ],
     },
+
+    "GEN": {
+        "summary": "Context-aware attacks generated from "
+                   "agent profile. These payloads are tailored "
+                   "to the specific deployment context and "
+                   "represent the most realistic attack vectors "
+                   "for this agent.",
+        "steps": [
+            "Review context-aware findings against your "
+            "agent's declared role, tools, and data boundaries. "
+            "These attacks are tailored to your deployment.",
+
+            "Harden system prompts with explicit scope limits "
+            "that reference your agent's actual capabilities "
+            "and prohibited actions.",
+
+            "Implement input validation tuned to your domain "
+            "vocabulary and common user request patterns.",
+
+            "Re-run AIST after configuration changes to verify "
+            "context-specific attack paths are closed.",
+
+            "Monitor for requests that mirror generated probe "
+            "patterns in production logs.",
+        ],
+        "owasp_control": "LLM01:2025 - Prompt Injection",
+        "atlas_mitigation": "AML.M0015 - Adversarial Input "
+                            "Detection",
+        "references": [
+            "https://genai.owasp.org/llmrisk/llm01-prompt-injection/",
+            "https://atlas.mitre.org/mitigations/AML.M0015",
+        ],
+    },
 }
 
 

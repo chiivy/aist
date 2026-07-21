@@ -37,6 +37,13 @@ from aist.recon.probe import run_recon, domain_mapping_probes
 from aist.recon.adaptive import AdaptiveRecon, AgentProfile
 from aist.scanner.sideeffects import SideEffectsMonitor
 from aist.scanner.adaptive_multiturn import MultiTurnScanner
+from aist.scanner.category_registry import (
+    OUTPUT_CATEGORY,
+    REGISTERED_CATEGORY_SCANNERS,
+    filter_direct_categories,
+    scanner_registry_summary,
+    should_run_direct_scanner,
+)
 from aist.recon.discovery import run_discovery
 from aist.recon.fingerprint import run_fingerprinting
 from aist.recon.streaming import truncate_if_oversized
@@ -90,23 +97,6 @@ from aist.reporting.sarif import (
 
 log = get_logger(__name__)
 
-REGISTERED_CATEGORY_SCANNERS = {
-    "A": "direct",
-    "B": "direct",
-    "C": "direct",
-    "D": "direct",
-    "E": "direct",
-    "F": "direct",
-    "BL": "direct",
-    "GEN": "generated",
-    "INDIRECT": "indirect",
-    "S": "multiturn",
-    "G": "guardrail",
-    "H": "toolparam",
-    "I": "output",
-    "J": "infrastructure",
-    "MA": "multiagent",
-}
 console = Console()
 
 
@@ -528,6 +518,16 @@ async def run_full_scan(
             for category in (categories or [])
             if category not in REGISTERED_CATEGORY_SCANNERS
         ])
+        registered_line, missing_from_request = (
+            scanner_registry_summary(categories)
+        )
+        console.print(f"[dim]{registered_line}[/dim]")
+        if missing_from_request:
+            console.print(
+                "[yellow]No scanner for: "
+                f"{', '.join(missing_from_request)}[/yellow]"
+            )
+        console.print()
         if missing_registered_categories:
             log.warning(
                 "scanner_categories_unregistered",
@@ -568,45 +568,25 @@ async def run_full_scan(
             )
 
             if scanner_name == "direct":
-                direct_cats = [
-                    "A", "B", "C", "D", "E", "F", "BL"
-                ]
-                if config.scan.safe_mode:
-                    direct_cats = [
-                        c for c in direct_cats if c != "E"
-                    ]
-                if not categories or any(
-                    c in direct_cats
-                    for c in (categories or [])
-                ):
-                    if categories:
-                        run_cats = [
-                            c for c in categories
-                            if c in direct_cats
-                        ]
-                    else:
-                        run_cats = list(direct_cats)
-                    if config.scan.safe_mode:
-                        run_cats = [
-                            c for c in run_cats
-                            if c not in {
-                                "E", "H", "S", "V",
-                                "INDIRECT",
-                            }
-                        ]
-                    evidence, results = (
-                        await run_direct_scanner(
-                            config,
-                            canary_token,
-                            run_cats,
-                            auth_manager=auth_manager,
-                            side_effects_monitor=(
-                                side_effects_monitor
-                            ),
-                        )
+                if should_run_direct_scanner(categories):
+                    run_cats = filter_direct_categories(
+                        categories,
+                        safe_mode=config.scan.safe_mode,
                     )
-                    all_evidence.extend(evidence)
-                    all_run_results.update(results)
+                    if run_cats:
+                        evidence, results = (
+                            await run_direct_scanner(
+                                config,
+                                canary_token,
+                                run_cats,
+                                auth_manager=auth_manager,
+                                side_effects_monitor=(
+                                    side_effects_monitor
+                                ),
+                            )
+                        )
+                        all_evidence.extend(evidence)
+                        all_run_results.update(results)
 
             elif scanner_name == "generated":
                 if (
@@ -625,10 +605,13 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             elif scanner_name == "indirect":
+                indirect_requested = (
+                    not categories
+                    or "INDIRECT" in (categories or [])
+                    or "I" in (categories or [])
+                )
                 if not config.scan.safe_mode and (
-                    not categories or "INDIRECT" in (
-                        categories or []
-                    )
+                    indirect_requested
                 ):
                     evidence, results = (
                         await run_indirect_scanner(
@@ -683,9 +666,11 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             elif scanner_name == "output":
-                if not categories or "I" in (
-                    categories or []
-                ):
+                output_requested = (
+                    categories is None
+                    or OUTPUT_CATEGORY in (categories or [])
+                )
+                if output_requested:
                     evidence, results = (
                         await run_output_scanner(
                             config, canary_token,

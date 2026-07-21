@@ -565,6 +565,200 @@ COMPLIANCE_MAPPINGS = {
             },
         ],
     },
+
+    "J": {
+        "title": "Infrastructure Security",
+        "owasp_llm": {
+            "id": "LLM06:2025",
+            "name": "Sensitive Information Disclosure",
+            "url": "https://genai.owasp.org/llmrisk/"
+                   "llm06-sensitive-information-disclosure/",
+        },
+        "owasp_agentic": {
+            "id": "AGEN05:2025",
+            "name": "Insecure Infrastructure",
+        },
+        "mitre_atlas": [
+            {
+                "id": "AML.T0040",
+                "name": "AI Model Inference API Access",
+                "url": "https://atlas.mitre.org/techniques/"
+                       "AML.T0040",
+            },
+        ],
+        "nist_ai_rmf": [
+            {
+                "function": "GOVERN",
+                "category": "1.1",
+                "description": "Policies for AI risk management",
+            },
+        ],
+        "eu_ai_act": [
+            {
+                "article": "Article 15",
+                "description": "Cybersecurity requirements",
+            },
+        ],
+        "soc2": [
+            {
+                "criteria": "CC6.1",
+                "description": "Logical and physical access "
+                               "controls",
+            },
+        ],
+        "iso_27001": [
+            {
+                "control": "A.8.28",
+                "description": "Secure coding",
+            },
+        ],
+    },
+
+    "MA": {
+        "title": "Multi-Agent Traversal",
+        "owasp_llm": {
+            "id": "LLM01:2025",
+            "name": "Prompt Injection",
+            "url": "https://genai.owasp.org/llmrisk/"
+                   "llm01-prompt-injection/",
+        },
+        "owasp_agentic": {
+            "id": "AGEN01:2025",
+            "name": "Prompt Injection in Agentic Systems",
+        },
+        "mitre_atlas": [
+            {
+                "id": "AML.T0080",
+                "name": "AI Agent Context Poisoning",
+                "url": "https://atlas.mitre.org/techniques/"
+                       "AML.T0080",
+            },
+        ],
+        "nist_ai_rmf": [
+            {
+                "function": "GOVERN",
+                "category": "1.1",
+                "description": "Policies for AI risk management",
+            },
+        ],
+        "eu_ai_act": [
+            {
+                "article": "Article 15",
+                "description": "Cybersecurity requirements",
+            },
+        ],
+        "soc2": [
+            {
+                "criteria": "CC6.1",
+                "description": "Logical and physical access "
+                               "controls",
+            },
+        ],
+        "iso_27001": [
+            {
+                "control": "A.8.28",
+                "description": "Secure coding",
+            },
+        ],
+    },
+
+    "INDIRECT": {
+        "title": "Indirect Prompt Injection",
+        "owasp_llm": {
+            "id": "LLM01:2025",
+            "name": "Prompt Injection",
+            "url": "https://genai.owasp.org/llmrisk/"
+                   "llm01-prompt-injection/",
+        },
+        "owasp_agentic": {
+            "id": "AGEN01:2025",
+            "name": "Prompt Injection in Agentic Systems",
+        },
+        "mitre_atlas": [
+            {
+                "id": "AML.T0051.001",
+                "name": "LLM Prompt Injection - Indirect",
+                "url": "https://atlas.mitre.org/techniques/"
+                       "AML.T0051/001",
+            },
+        ],
+        "nist_ai_rmf": [
+            {
+                "function": "GOVERN",
+                "category": "1.1",
+                "description": "Policies for AI risk management",
+            },
+        ],
+        "eu_ai_act": [
+            {
+                "article": "Article 15",
+                "description": "Cybersecurity requirements",
+            },
+        ],
+        "soc2": [
+            {
+                "criteria": "CC6.1",
+                "description": "Logical and physical access "
+                               "controls",
+            },
+        ],
+        "iso_27001": [
+            {
+                "control": "A.8.28",
+                "description": "Secure coding",
+            },
+        ],
+    },
+
+    "GEN": {
+        "title": "Context-Aware Generated Attacks",
+        "owasp_llm": {
+            "id": "LLM01:2025",
+            "name": "Prompt Injection",
+            "url": "https://genai.owasp.org/llmrisk/"
+                   "llm01-prompt-injection/",
+        },
+        "owasp_agentic": {
+            "id": "AGEN01:2025",
+            "name": "Prompt Injection in Agentic Systems",
+        },
+        "mitre_atlas": [
+            {
+                "id": "AML.T0051.000",
+                "name": "LLM Prompt Injection - Direct",
+                "url": "https://atlas.mitre.org/techniques/"
+                       "AML.T0051/000",
+            },
+        ],
+        "nist_ai_rmf": [
+            {
+                "function": "GOVERN",
+                "category": "1.1",
+                "description": "Policies and processes for "
+                               "AI risk management",
+            },
+        ],
+        "eu_ai_act": [
+            {
+                "article": "Article 15",
+                "description": "Accuracy, robustness and "
+                               "cybersecurity",
+            },
+        ],
+        "soc2": [
+            {
+                "criteria": "CC6.1",
+                "description": "Logical and physical access "
+                               "controls",
+            },
+        ],
+        "iso_27001": [
+            {
+                "control": "A.8.28",
+                "description": "Secure coding",
+            },
+        ],
+    },
 }
 
 

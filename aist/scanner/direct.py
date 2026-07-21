@@ -25,6 +25,10 @@ import uuid
 
 from aist.logger import get_logger
 from aist.config import AISTConfig, resolve_canary_variables
+from aist.scanner.category_registry import (
+    get_scanner_for_category,
+    is_registered_category,
+)
 from aist.scanner.base import (
     load_payload_file,
     get_payload_variants,
@@ -219,7 +223,18 @@ async def run_direct_scanner(
     all_evidence = []
     all_run_results = {}
 
-    run_categories = categories or list(CATEGORY_FILES.keys())
+    if categories is not None and len(categories) == 0:
+        log.info(
+            "direct_scanner_skipped",
+            reason="No direct categories requested",
+        )
+        return all_evidence, all_run_results
+
+    run_categories = (
+        categories
+        if categories is not None
+        else list(CATEGORY_FILES.keys())
+    )
 
     log.info(
         "direct_scanner_starting",
@@ -233,6 +248,13 @@ async def run_direct_scanner(
 
     for category in run_categories:
         if category not in CATEGORY_FILES:
+            if is_registered_category(category):
+                log.debug(
+                    "category_routed_elsewhere",
+                    category=category,
+                    scanner=get_scanner_for_category(category),
+                )
+                continue
             log.warning(
                 "unknown_category",
                 category=category,
