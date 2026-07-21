@@ -31,7 +31,7 @@ from aist.logger import get_logger
 from aist.config import AISTConfig
 from aist.auth.manager import AuthManager
 from aist.evidence.collector import ScanEvidence, is_genuine_finding
-from aist.recon.probe import run_recon
+from aist.recon.probe import run_recon, domain_mapping_probes
 from aist.recon.discovery import run_discovery
 from aist.recon.fingerprint import run_fingerprinting
 from aist.recon.streaming import truncate_if_oversized
@@ -71,8 +71,8 @@ from aist.remediation.contextual import get_contextual_guidance
 from aist.reporting.html import (
     generate_html_report,
     generate_executive_html_report,
+    generate_redacted_report,
     save_html_report,
-    sanitise_for_ai_review,
 )
 from aist.reporting.json_report import (
     generate_json_report,
@@ -117,7 +117,7 @@ def _recon_run_result(confidence: int = 95):
 
 async def run_full_scan(
     config: AISTConfig,
-    output_path: str = "reports/aist-report.html",
+    output_path: str = "reports/report.html",
 ) -> dict:
     """
     Run a complete AIST security scan.
@@ -125,9 +125,14 @@ async def run_full_scan(
     Orchestrates all phases from recon through
     reporting and returns a summary of results.
 
+    Sibling reports (executive, JSON, SARIF,
+    and redacted) are written alongside the
+    HTML path in the same directory.
+
     Args:
         config:      AIST configuration
         output_path: Path for HTML report output
+                     (e.g. reports/{date}-{target}/report.html)
 
     Returns:
         Dictionary with scan results summary
@@ -171,6 +176,7 @@ async def run_full_scan(
             "canary_triggered": False,
             "html_report": "",
             "executive_html_path": "",
+            "redacted_path": "",
             "json_report": "",
             "sarif_report": "",
             "duration_seconds": 0,
@@ -203,11 +209,19 @@ async def run_full_scan(
 
         # Phase 1: Recon
         recon_task = progress.add_task(
-            "[cyan]Recon phase...", total=3
+            "[cyan]Recon phase...", total=4
         )
 
         console.print("[dim]Running basic probes...[/dim]")
         recon_report = await run_recon(config)
+        progress.advance(recon_task)
+
+        console.print(
+            "[dim]Mapping domain model...[/dim]"
+        )
+        recon_report = await domain_mapping_probes(
+            config, recon_report
+        )
         progress.advance(recon_task)
 
         console.print(
@@ -735,6 +749,12 @@ async def run_full_scan(
             total=4,
         )
 
+        # All artefacts for one scan share a folder:
+        # reports/{date}-{sanitised-target}/report.*
+        report_path = Path(output_path)
+        report_dir = report_path.parent
+        report_stem = report_path.stem
+
         html = generate_html_report(
             scan_evidence=scan_evidence,
             recon_report=recon_report,
@@ -745,22 +765,20 @@ async def run_full_scan(
             scan_started_at=scan_start,
             scan_completed_at=datetime.utcnow(),
         )
-        html_path = save_html_report(html, output_path)
+        html_path = save_html_report(
+            html, str(report_path),
+        )
         progress.advance(report_task)
 
-        ai_review_path = None
-        if config.scan.ai_review_mode:
-            sanitised_html = sanitise_for_ai_review(html)
-            ai_review_path = output_path.replace(
-                ".html", "-ai-review.html"
-            )
-            save_html_report(sanitised_html, ai_review_path)
-            console.print(
-                f"  AI Review: {ai_review_path}"
-            )
+        # Always generate redacted sharing report.
+        redacted_html = generate_redacted_report(html)
+        redacted_path = str(
+            report_dir / f"{report_stem}-redacted.html"
+        )
+        save_html_report(redacted_html, redacted_path)
 
-        executive_path = output_path.replace(
-            ".html", "-executive.html"
+        executive_path = str(
+            report_dir / f"{report_stem}-executive.html"
         )
         executive_html = generate_executive_html_report(
             scan_evidence=scan_evidence,
@@ -775,8 +793,8 @@ async def run_full_scan(
         )
         progress.advance(report_task)
 
-        json_output_path = output_path.replace(
-            ".html", ".json"
+        json_output_path = str(
+            report_dir / f"{report_stem}.json"
         )
         json_report = generate_json_report(
             scan_evidence=scan_evidence,
@@ -789,8 +807,8 @@ async def run_full_scan(
         save_json_report(json_report, json_output_path)
         progress.advance(report_task)
 
-        sarif_output_path = output_path.replace(
-            ".html", ".sarif"
+        sarif_output_path = str(
+            report_dir / f"{report_stem}.sarif"
         )
         sarif_report = generate_sarif_report(
             scan_evidence=scan_evidence,
@@ -811,6 +829,7 @@ async def run_full_scan(
         confidence_scores,
         html_path,
         executive_html_path,
+        redacted_path,
         scan_duration,
         infrastructure_issues=len(
             scan_evidence.infrastructure_findings
@@ -858,6 +877,7 @@ async def run_full_scan(
         "infrastructure_findings": infra_findings_out,
         "html_report": html_path,
         "executive_html_path": executive_html_path,
+        "redacted_path": redacted_path,
         "json_report": json_output_path,
         "sarif_report": sarif_output_path,
         "duration_seconds": scan_duration,
@@ -1040,6 +1060,7 @@ def _print_scan_summary(
     confidence_scores,
     html_path,
     executive_html_path,
+    redacted_path,
     duration,
     infrastructure_issues: int = 0,
 ) -> None:
@@ -1082,6 +1103,7 @@ def _print_scan_summary(
             f"[bold]Reports saved:[/bold]\n"
             f"  HTML:       {html_path}\n"
             f"  Executive:  {executive_html_path}\n"
+            f"  Redacted:   {redacted_path}\n"
             f"  JSON:       {html_path.replace('.html', '.json')}\n"
             f"  SARIF:      {html_path.replace('.html', '.sarif')}",
             border_style="green" if not critical else "red",

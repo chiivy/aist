@@ -166,10 +166,10 @@ def save_html_report(
     return str(path.absolute())
 
 
-def sanitise_for_ai_review(html_content: str) -> str:
+def sanitise_for_sharing(html_content: str) -> str:
     """
     Replace sensitive values with placeholders
-    suitable for sharing with AI review tools.
+    suitable for sharing outside the scan team.
 
     Preserves all structural information:
     finding IDs, severity scores, categories,
@@ -217,9 +217,9 @@ def sanitise_for_ai_review(html_content: str) -> str:
             padding: 1rem 2rem; margin-bottom: 1rem;
             border-left: 4px solid #3b82f6;
             font-family: monospace; font-size: 0.85rem;">
-  <strong>AI REVIEW VERSION</strong> --
+  <strong>REDACTED VERSION</strong> --
   This report has been sanitised for third-party
-  and AI-assisted review. Sensitive values including
+  and external sharing. Sensitive values including
   email addresses, authentication tokens, display names,
   and internal IP addresses have been replaced with
   placeholders. All finding IDs, severity scores,
@@ -232,6 +232,19 @@ def sanitise_for_ai_review(html_content: str) -> str:
     )
 
     return sanitised
+
+
+def generate_redacted_report(html_content: str) -> str:
+    """
+    Generate a redacted HTML report for sharing.
+
+    Args:
+        html_content: Full HTML report string
+
+    Returns:
+        Sanitised HTML safe for external sharing
+    """
+    return sanitise_for_sharing(html_content)
 
 
 EXECUTIVE_FINDING_TITLES = {

@@ -372,6 +372,18 @@ async def synthesise_agent_profile(
             f"Discovered tools: {', '.join(discovered_tools)}"
         )
 
+    domain_responses = getattr(
+        recon_report, "domain_mapping_responses", []
+    ) or []
+    for index, response in enumerate(
+        domain_responses, start=1
+    ):
+        if response:
+            recon_data.append(
+                f"Domain mapping response {index}:\n"
+                f"{response[:500]}"
+            )
+
     if not recon_data:
         return ""
 

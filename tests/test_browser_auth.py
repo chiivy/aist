@@ -1,4 +1,4 @@
-"""Tests for browser auth helpers and AI review sanitisation."""
+"""Tests for browser auth helpers and redacted report sanitisation."""
 
 from aist.auth.browser import (
     _is_auth_response,
@@ -7,7 +7,7 @@ from aist.auth.browser import (
     save_session,
     BrowserSession,
 )
-from aist.reporting.html import sanitise_for_ai_review
+from aist.reporting.html import sanitise_for_sharing
 
 
 def test_is_auth_url_filters_login_endpoints() -> None:
@@ -30,14 +30,13 @@ def test_is_auth_response_allows_chat_payload() -> None:
     assert _is_auth_response(body) is False
 
 
-def test_sanitise_for_ai_review_redacts_email() -> None:
-    """Emails are replaced in AI review output."""
+def test_sanitise_for_sharing_redacts_email() -> None:
+    """Emails are replaced in redacted output."""
     html = "<body><p>Contact user@example.com</p></body>"
-    result = sanitise_for_ai_review(html)
+    result = sanitise_for_sharing(html)
     assert "user@example.com" not in result
     assert "[EMAIL REDACTED]" in result
-    assert "AI REVIEW VERSION" in result
-
+    assert "REDACTED VERSION" in result
 
 def test_session_save_and_load(tmp_path) -> None:
     """Saved sessions can be loaded before expiry."""

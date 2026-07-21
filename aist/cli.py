@@ -557,7 +557,7 @@ def main():
     "--output", "-o",
     default=None,
     help="Output file path for HTML report. "
-         "Default: auto-generated timestamped filename."
+         "Default: reports/{date}-{target}/report.html."
 )
 @click.option(
     "--mode", "-m",
@@ -719,14 +719,19 @@ def main():
          "Default: .aist_session.json",
 )
 @click.option(
-    "--ai-review",
+    "--redacted",
     is_flag=True,
     default=False,
-    help="Generate a sanitised AI review report "
-         "alongside the main report. Masks emails, "
-         "tokens, names, and internal IPs. Safe "
-         "for sharing with AI assistants or "
-         "third-party reviewers.",
+    help="Deprecated no-op. A redacted report is "
+         "always generated alongside the main report.",
+)
+@click.option(
+    "--ai-review",
+    "redacted",
+    is_flag=True,
+    default=False,
+    hidden=True,
+    help="Deprecated alias for --redacted.",
 )
 def scan(
     target, tools, output, mode, runs,
@@ -737,7 +742,7 @@ def scan(
     auth_tenant_id, auth_client_id, safe_mode,
     message_field, body_fields, custom_headers,
     response_field, no_followup, app_context,
-    reuse_session, session_file, ai_review,
+    reuse_session, session_file, redacted,
 ):
     """
     Run a full injection security scan against
@@ -825,7 +830,7 @@ def scan(
             r'[^\w]', '-', target or "browser-captured"
         )[:30].strip("-")
         output = (
-            f"reports/aist-{timestamp}-{safe_target}.html"
+            f"reports/{timestamp}-{safe_target}/report.html"
         )
 
     if target:
@@ -910,8 +915,10 @@ def scan(
     if no_followup:
         config.scan.followup_enabled = False
 
-    if ai_review:
-        config.scan.ai_review_mode = True
+    # --redacted / --ai-review / AIST_REDACTED retained
+    # as no-ops; redacted report is always generated.
+    if redacted:
+        config.scan.redacted_mode = True
 
     effective_app_context = app_context or wizard_app_context
     if effective_app_context:
@@ -1118,7 +1125,10 @@ def discover(target, mode, output, log_level, operator):
     )
 
     async def run_discovery_only():
-        from aist.recon.probe import run_recon
+        from aist.recon.probe import (
+            run_recon,
+            domain_mapping_probes,
+        )
         from aist.recon.discovery import run_discovery
         from aist.recon.fingerprint import run_fingerprinting
 
@@ -1126,6 +1136,13 @@ def discover(target, mode, output, log_level, operator):
             "[dim]Running recon probes...[/dim]"
         )
         recon_report = await run_recon(config)
+
+        console.print(
+            "[dim]Mapping domain model...[/dim]"
+        )
+        recon_report = await domain_mapping_probes(
+            config, recon_report
+        )
 
         console.print(
             "[dim]Mapping attack surface...[/dim]"
