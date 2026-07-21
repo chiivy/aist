@@ -209,21 +209,15 @@ async def run_full_scan(
             "target.[/yellow]\n"
         )
 
+    from aist.scan_profiles import get_profile_banner
+
     profile_name = getattr(config.scan, "profile", "standard")
-    adaptive_on = getattr(config.scan, "adaptive_recon", False)
-    multiturn_on = getattr(
-        config.scan, "multiturn_enabled", False
+    profile_line, testing_line = get_profile_banner(
+        profile_name,
+        getattr(config.scan, "categories", None),
     )
-    est_time = getattr(
-        config.scan, "estimated_time", "30-45 minutes"
-    )
-    console.print(
-        f"[bold]Profile:[/bold] {profile_name} | "
-        f"Adaptive recon: "
-        f"{'on' if adaptive_on else 'off'} | "
-        f"Multi-turn: {'on' if multiturn_on else 'off'} | "
-        f"Est. time: {est_time}\n"
-    )
+    console.print(f"[bold]{profile_line}[/bold]")
+    console.print(f"[bold]{testing_line}[/bold]\n")
 
     if config.canary.canary_configured:
         console.print(
@@ -438,26 +432,31 @@ async def run_full_scan(
                 f"[dim]{config.target.app_context}[/dim]\n"
             )
 
-        generation_result = await generate_context_payloads(
-            config=config,
-            recon_report=recon_report,
-            discovery_result=discovery_result,
-        )
-        generated_payloads = generation_result.payloads
-        scan_evidence.generated_payload_count = len(
-            generated_payloads
-        )
-        scan_evidence.generated_agent_context = (
-            generation_result.agent_context or None
-        )
-
-        if generated_payloads:
-            console.print(
-                f"[cyan]Context-aware probes:[/cyan] "
-                f"{len(generated_payloads)} questions generated "
-                f"for "
-                f"{generation_result.agent_context or 'target agent'}"
+        generated_payloads: list = []
+        if config.scan.gen_enabled:
+            generation_result = await generate_context_payloads(
+                config=config,
+                recon_report=recon_report,
+                discovery_result=discovery_result,
             )
+            generated_payloads = generation_result.payloads
+            scan_evidence.generated_payload_count = len(
+                generated_payloads
+            )
+            scan_evidence.generated_agent_context = (
+                generation_result.agent_context or None
+            )
+
+            if generated_payloads:
+                console.print(
+                    f"[cyan]Context-aware probes:[/cyan] "
+                    f"{len(generated_payloads)} questions generated "
+                    f"for "
+                    f"{generation_result.agent_context or 'target agent'}"
+                )
+        else:
+            scan_evidence.generated_payload_count = 0
+            scan_evidence.generated_agent_context = None
 
         # Phase 2: Canary token
         canary_token = generate_canary_token()
@@ -480,7 +479,12 @@ async def run_full_scan(
 
         scanner_tasks = [
             ("direct", "Direct injection (A-F)"),
-            ("generated", "Context-aware probes (GEN)"),
+        ]
+        if config.scan.gen_enabled:
+            scanner_tasks.append(
+                ("generated", "Context-aware probes (GEN)"),
+            )
+        scanner_tasks.extend([
             ("indirect", "Indirect injection"),
             ("multiturn", "Multi-turn sequences"),
             ("guardrail", "Guardrail bypass (G)"),
@@ -489,7 +493,7 @@ async def run_full_scan(
             ("infrastructure", "Infrastructure checks (J)"),
             ("canary", "Canary token check"),
             ("multiagent", "Multi-agent traversal (MA)"),
-        ]
+        ])
 
         scan_task = progress.add_task(
             "[red]Running scanners...",
@@ -1050,6 +1054,15 @@ async def run_full_scan(
         ),
         config=config,
     )
+
+    from aist.scan_profiles import get_completion_disclaimer
+
+    disclaimer = get_completion_disclaimer(
+        getattr(config.scan, "profile", "standard"),
+        getattr(config.scan, "categories", None),
+    )
+    if disclaimer:
+        console.print(f"\n[dim]{disclaimer}[/dim]\n")
 
     infra_findings_out = [
         {

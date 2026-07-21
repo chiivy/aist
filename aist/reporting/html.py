@@ -34,6 +34,11 @@ from aist.evidence.collector import (
     is_genuine_finding,
     is_unvalidated_finding,
 )
+from aist.scan_profiles import (
+    category_label,
+    get_profile_spec,
+    get_testing_summary,
+)
 
 log = get_logger(__name__)
 console = Console()
@@ -876,6 +881,9 @@ def _build_findings(
         finding = {
             "payload_id": evidence.payload_id,
             "payload_category": evidence.payload_category,
+            "category_label": category_label(
+                evidence.payload_category
+            ),
             "is_finding": is_finding,
             "severity_score": severity.final_score,
             "severity_label": severity.severity_label,
@@ -986,6 +994,9 @@ def _build_unvalidated_findings(
         unvalidated.append({
             "payload_id": evidence.payload_id,
             "payload_category": evidence.payload_category,
+            "category_label": category_label(
+                evidence.payload_category
+            ),
             "severity_score": (
                 severity.final_score if severity else None
             ),
@@ -1466,6 +1477,12 @@ def _render_template(
     env = Environment(loader=BaseLoader())
     template = env.from_string(HTML_TEMPLATE)
 
+    profile_name = getattr(
+        config.scan, "profile", "standard"
+    )
+    profile_spec = get_profile_spec(profile_name)
+    scan_categories = getattr(config.scan, "categories", None)
+
     return template.render(
         findings=findings,
         unvalidated_findings=unvalidated_findings or [],
@@ -1525,8 +1542,10 @@ def _render_template(
         adaptive_recon=adaptive_recon or {},
         multiturn_narratives=multiturn_narratives or [],
         silent_findings=silent_findings or [],
-        scan_profile=getattr(
-            config.scan, "profile", "standard"
+        scan_profile=profile_name,
+        scan_payload_summary=profile_spec.payload_summary,
+        scan_testing_summary=get_testing_summary(
+            profile_name, scan_categories
         ),
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -2586,6 +2605,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         Scan Information
       </div>
       <div class="info-row">
+        <span class="info-key">Scan Profile</span>
+        <span class="info-value">{{ scan_profile | title }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-key">Payload Scope</span>
+        <span class="info-value">{{ scan_payload_summary }}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-key">Testing</span>
+        <span class="info-value">{{ scan_testing_summary }}</span>
+      </div>
+      <div class="info-row">
         <span class="info-key">Target</span>
         <span class="info-value">{{ target }}</span>
       </div>
@@ -2955,7 +2986,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           {{ finding.unvalidated_badge }}
         </span>
         <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem;">
-          Category {{ finding.payload_category }}
+          Category {{ finding.category_label }}
           {% if finding.string_matches %}
           · Matches: {{ finding.string_matches | join(', ') }}
           {% endif %}

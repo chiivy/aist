@@ -76,7 +76,8 @@ class ScanConfig:
     profile: str = "standard"
     adaptive_recon: bool = True
     multiturn_enabled: bool = False
-    estimated_time: str = "30-45 minutes"
+    payload_summary: str = "~100"
+    gen_enabled: bool = True
     fail_on: Optional[str] = None
     notify_slack: Optional[str] = None
     notify_email: Optional[str] = None
