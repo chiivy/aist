@@ -17,6 +17,7 @@ from aist.logger import get_logger
 from aist.config import AISTConfig, resolve_canary_variables
 from aist.scanner.base import send_payload, jitter
 from aist.evidence.collector import collect_evidence, run_llm_judge
+from aist.recon.discovery import resolve_connected_agent_targets
 
 log = get_logger(__name__)
 
@@ -101,6 +102,7 @@ async def run_multiagent_scanner(
     connected_agents: list,
     canary_token: str,
     auth_manager=None,
+    connected_agents_response: str = "",
 ) -> tuple:
     """
     Test cross-agent injection via primary agent.
@@ -109,11 +111,16 @@ async def run_multiagent_scanner(
     sends payloads that attempt to use the primary
     agent as a relay to inject into secondary agents.
 
+    Prefers concrete agent names extracted from the
+    recon response over generic phrase indicators.
+
     Args:
         config:           AIST configuration
         connected_agents: List of agent names from recon
         canary_token:     Canary token for this scan
         auth_manager:     Optional auth manager
+        connected_agents_response: Raw recon text used
+                        to extract real agent names
 
     Returns:
         Tuple of (all_evidence, all_run_results)
@@ -123,7 +130,12 @@ async def run_multiagent_scanner(
     all_evidence = []
     all_run_results = {}
 
-    if not connected_agents:
+    agent_targets = resolve_connected_agent_targets(
+        connected_agents,
+        connected_agents_response,
+    )
+
+    if not agent_targets:
         log.info(
             "multiagent_scan_skipped",
             reason="No connected agents detected during recon.",
@@ -132,12 +144,12 @@ async def run_multiagent_scanner(
 
     log.info(
         "multiagent_scan_starting",
-        agents=connected_agents,
+        agents=agent_targets,
         payloads=len(CROSS_AGENT_PAYLOADS),
     )
 
     async with httpx.AsyncClient() as client:
-        for agent_name in connected_agents:
+        for agent_name in agent_targets:
             for payload_def in CROSS_AGENT_PAYLOADS:
 
                 payload_id = (
@@ -244,7 +256,7 @@ Respond in JSON:
         "multiagent_scan_complete",
         total_payloads=len(all_evidence),
         genuine_findings=len(genuine),
-        agents_tested=connected_agents,
+        agents_tested=agent_targets,
     )
 
     return all_evidence, all_run_results

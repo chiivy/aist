@@ -13,6 +13,8 @@ Phases:
 """
 
 import asyncio
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -113,6 +115,54 @@ def _recon_run_result(confidence: int = 95):
         canary_leaked=False,
         error=None,
     )]
+
+
+def _resolve_scan_dir(
+    config: AISTConfig,
+    output_path: str,
+) -> Path:
+    """
+    Resolve the per-scan report directory.
+
+    Layout:
+        reports/{datetime}-{sanitised-target}/
+
+    If output_path already points inside a per-scan
+    subfolder, that folder is reused. Flat paths
+    under reports/ are converted into a dedicated
+    scan subfolder. The directory is created before
+    any report files are written.
+    """
+    path = Path(output_path)
+    reports_root = Path(config.scan.reports_dir)
+    parent = path.parent
+
+    flat_in_reports = (
+        parent == reports_root
+        or parent == Path(".")
+        or str(parent) in (".", "reports")
+    )
+
+    if flat_in_reports:
+        stem = path.stem
+        if stem.startswith("aist-") and len(stem) > 5:
+            folder_name = stem[len("aist-"):]
+        else:
+            timestamp = datetime.now().strftime(
+                "%Y-%m-%d-%H-%M"
+            )
+            safe_target = re.sub(
+                r"[^\w]",
+                "-",
+                config.target.endpoint or "browser-captured",
+            )[:30].strip("-")
+            folder_name = f"{timestamp}-{safe_target}"
+        scan_dir = reports_root / folder_name
+    else:
+        scan_dir = parent
+
+    os.makedirs(scan_dir, exist_ok=True)
+    return scan_dir
 
 
 async def run_full_scan(
@@ -238,6 +288,9 @@ async def run_full_scan(
         fingerprint = await run_fingerprinting(
             config,
             initial_hint=recon_report.model_hint,
+            model_detected=getattr(
+                recon_report, "model_detected", ""
+            ),
         )
         progress.advance(recon_task)
 
@@ -517,6 +570,13 @@ async def run_full_scan(
                             connected_agents,
                             canary_token,
                             auth_manager=auth_manager,
+                            connected_agents_response=(
+                                getattr(
+                                    discovery_result,
+                                    "connected_agents_response",
+                                    "",
+                                )
+                            ),
                         )
                     )
                     all_evidence.extend(evidence)
@@ -749,11 +809,23 @@ async def run_full_scan(
             total=4,
         )
 
-        # All artefacts for one scan share a folder:
-        # reports/{date}-{sanitised-target}/report.*
-        report_path = Path(output_path)
-        report_dir = report_path.parent
-        report_stem = report_path.stem
+        # Each scan gets its own folder:
+        # reports/{datetime}-{sanitised-target}/
+        #   report.html
+        #   report-executive.html
+        #   report.json
+        #   report.sarif
+        #   report-redacted.html
+        scan_dir = _resolve_scan_dir(config, output_path)
+        html_output = str(scan_dir / "report.html")
+        executive_path = str(
+            scan_dir / "report-executive.html"
+        )
+        json_output_path = str(scan_dir / "report.json")
+        sarif_output_path = str(scan_dir / "report.sarif")
+        redacted_path = str(
+            scan_dir / "report-redacted.html"
+        )
 
         html = generate_html_report(
             scan_evidence=scan_evidence,
@@ -765,21 +837,13 @@ async def run_full_scan(
             scan_started_at=scan_start,
             scan_completed_at=datetime.utcnow(),
         )
-        html_path = save_html_report(
-            html, str(report_path),
-        )
+        html_path = save_html_report(html, html_output)
         progress.advance(report_task)
 
         # Always generate redacted sharing report.
         redacted_html = generate_redacted_report(html)
-        redacted_path = str(
-            report_dir / f"{report_stem}-redacted.html"
-        )
         save_html_report(redacted_html, redacted_path)
 
-        executive_path = str(
-            report_dir / f"{report_stem}-executive.html"
-        )
         executive_html = generate_executive_html_report(
             scan_evidence=scan_evidence,
             severity_scores=severity_scores,
@@ -793,9 +857,6 @@ async def run_full_scan(
         )
         progress.advance(report_task)
 
-        json_output_path = str(
-            report_dir / f"{report_stem}.json"
-        )
         json_report = generate_json_report(
             scan_evidence=scan_evidence,
             recon_report=recon_report,
@@ -807,9 +868,6 @@ async def run_full_scan(
         save_json_report(json_report, json_output_path)
         progress.advance(report_task)
 
-        sarif_output_path = str(
-            report_dir / f"{report_stem}.sarif"
-        )
         sarif_report = generate_sarif_report(
             scan_evidence=scan_evidence,
             severity_scores=severity_scores,

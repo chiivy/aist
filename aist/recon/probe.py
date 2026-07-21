@@ -9,6 +9,7 @@ responds normally. This baseline is used to
 detect deviations during later testing.
 """
 
+import json
 import httpx
 from dataclasses import dataclass, field
 from typing import Optional
@@ -50,6 +51,7 @@ class ReconReport:
     discovery_evidence: dict = field(default_factory=dict)
     has_memory: bool = False
     model_hint: str = "unknown"
+    model_detected: str = ""
     baseline_response: str = ""
     refusal_pattern: str = ""
     probe_results: list = field(default_factory=list)
@@ -147,6 +149,7 @@ async def send_probe(
     client: httpx.AsyncClient,
     config: AISTConfig,
     prompt: str,
+    recon_report: Optional[ReconReport] = None,
 ) -> str:
     """
     Send a single probe to the target agent
@@ -155,10 +158,17 @@ async def send_probe(
     All responses are returned as raw strings.
     Never processed as instructions.
 
+    When recon_report is provided, a top-level
+    "model" field in the raw JSON response
+    envelope is copied to recon_report.model_detected
+    if not already set.
+
     Args:
-        client: httpx async client
-        config: AIST configuration
-        prompt: Probe prompt to send
+        client:       httpx async client
+        config:       AIST configuration
+        prompt:       Probe prompt to send
+        recon_report: Optional report to update
+                      with envelope model metadata
 
     Returns:
         Response text from agent (untrusted string)
@@ -176,6 +186,27 @@ async def send_probe(
             timeout=config.scan.scan_timeout_seconds,
         )
         response.raise_for_status()
+
+        if (
+            recon_report is not None
+            and not recon_report.model_detected
+        ):
+            envelope_model = _extract_envelope_model(
+                response
+            )
+            if envelope_model:
+                recon_report.model_detected = (
+                    envelope_model
+                )
+                log.info(
+                    "model_detected_from_envelope",
+                    model=envelope_model,
+                )
+                if recon_report.model_hint == "unknown":
+                    recon_report.model_hint = (
+                        envelope_model
+                    )
+
         from aist.recon.streaming import collect_response
 
         assembled = await collect_response(
@@ -209,6 +240,34 @@ async def send_probe(
         return ""
 
 
+def _extract_envelope_model(
+    response: httpx.Response,
+) -> str:
+    """
+    Read a top-level "model" field from the raw
+    JSON response body, if present.
+
+    Args:
+        response: httpx response from the target
+
+    Returns:
+        Model string from the envelope, or empty
+    """
+    try:
+        data = response.json()
+    except (json.JSONDecodeError, ValueError):
+        return ""
+
+    if not isinstance(data, dict):
+        return ""
+
+    model = data.get("model")
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+
+    return ""
+
+
 async def run_recon(config: AISTConfig) -> ReconReport:
     """
     Run all recon probes against the target agent.
@@ -233,7 +292,8 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         log.info("running_probe", probe="R1")
         response = await send_probe(
             client, config,
-            RECON_PROBES[0]["prompt"]
+            RECON_PROBES[0]["prompt"],
+            recon_report=report,
         )
         if response:
             report.agent_responding = True
@@ -251,7 +311,10 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         # R2: System prompt discovery
         log.info("running_probe", probe="R2")
         for prompt in RECON_PROBES[1]["prompts"]:
-            response = await send_probe(client, config, prompt)
+            response = await send_probe(
+                client, config, prompt,
+                recon_report=report,
+            )
             if _looks_like_system_prompt(response):
                 report.system_prompt_exposed = True
                 report.system_prompt_response = response
@@ -265,7 +328,10 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         # R3: Capability mapping
         log.info("running_probe", probe="R3")
         for prompt in RECON_PROBES[2]["prompts"]:
-            response = await send_probe(client, config, prompt)
+            response = await send_probe(
+                client, config, prompt,
+                recon_report=report,
+            )
             tools, tool_evidence = _extract_tools_with_evidence(
                 response
             )
@@ -298,7 +364,10 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         log.info("running_probe", probe="R4")
         if config.target.mode == "active":
             for prompt in RECON_PROBES[3]["prompts"]:
-                response = await send_probe(client, config, prompt)
+                response = await send_probe(
+                    client, config, prompt,
+                    recon_report=report,
+                )
                 if response:
                     report.refusal_pattern = response[:200]
                     break
@@ -306,7 +375,10 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         # R5: Memory probing
         log.info("running_probe", probe="R5")
         for prompt in RECON_PROBES[4]["prompts"]:
-            response = await send_probe(client, config, prompt)
+            response = await send_probe(
+                client, config, prompt,
+                recon_report=report,
+            )
             if _indicates_memory(response):
                 report.has_memory = True
                 log.info("memory_detected", probe="R5")
@@ -315,7 +387,10 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         # R6: Model fingerprinting
         log.info("running_probe", probe="R6")
         for prompt in RECON_PROBES[5]["prompts"]:
-            response = await send_probe(client, config, prompt)
+            response = await send_probe(
+                client, config, prompt,
+                recon_report=report,
+            )
             model = _extract_model_hint(response)
             if model != "unknown":
                 report.model_hint = model
@@ -335,6 +410,7 @@ async def run_recon(config: AISTConfig) -> ReconReport:
         discovered_tools=report.discovered_tools,
         has_memory=report.has_memory,
         model_hint=report.model_hint,
+        model_detected=report.model_detected,
     )
 
     return report

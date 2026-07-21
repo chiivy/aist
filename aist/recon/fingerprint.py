@@ -14,7 +14,10 @@ from dataclasses import dataclass
 
 from aist.logger import get_logger
 from aist.config import AISTConfig
-from aist.recon.probe import send_probe
+from aist.recon.probe import (
+    send_probe,
+    ReconReport,
+)
 
 log = get_logger(__name__)
 
@@ -148,16 +151,21 @@ BEHAVIOURAL_PROBES = [
 async def run_fingerprinting(
     config: AISTConfig,
     initial_hint: str = "unknown",
+    model_detected: str = "",
 ) -> FingerprintResult:
     """
     Run model fingerprinting against target agent.
 
-    First uses the hint from basic recon probes.
-    If unknown, runs additional fingerprinting probes.
+    First uses the hint from basic recon probes
+    or a model name from the HTTP response envelope.
+    If unknown, runs additional fingerprinting probes
+    and checks each raw JSON body for a "model" field.
 
     Args:
-        config:       AIST configuration
-        initial_hint: Model hint from recon probe R6
+        config:         AIST configuration
+        initial_hint:   Model hint from recon probe R6
+        model_detected: Model from response envelope
+                        (recon_report.model_detected)
 
     Returns:
         FingerprintResult with model profile
@@ -166,37 +174,74 @@ async def run_fingerprinting(
         "fingerprinting_started",
         target=config.target.endpoint,
         initial_hint=initial_hint,
+        model_detected=model_detected or None,
     )
 
-    # If recon already identified the model use it
-    if initial_hint != "unknown":
+    # Prefer exact envelope model, then text hint
+    envelope_hint = _normalise_provider_hint(
+        model_detected or initial_hint
+    )
+
+    if envelope_hint != "unknown":
         profile = MODEL_PROFILES.get(
-            initial_hint,
-            MODEL_PROFILES["unknown"]
+            envelope_hint,
+            MODEL_PROFILES["unknown"],
         )
         result = FingerprintResult(
-            provider=initial_hint,
-            model_family=initial_hint,
+            provider=envelope_hint,
+            model_family=(
+                model_detected
+                or initial_hint
+                or envelope_hint
+            ),
             is_commercial=profile["is_commercial"],
             is_open_source=profile["is_open_source"],
             known_weaknesses=profile["known_weaknesses"],
-            recommended_categories=profile["recommended_categories"],
+            recommended_categories=profile[
+                "recommended_categories"
+            ],
         )
         log.info(
             "fingerprint_from_recon",
-            provider=initial_hint,
-            recommended_categories=result.recommended_categories,
+            provider=envelope_hint,
+            model_family=result.model_family,
+            recommended_categories=(
+                result.recommended_categories
+            ),
         )
         return result
 
     # Otherwise run additional probes
     detected_provider = "unknown"
+    envelope_model = ""
+    envelope_report = ReconReport(
+        target=config.target.endpoint
+    )
 
     async with httpx.AsyncClient() as client:
 
         # Direct questioning probes
         for prompt in FINGERPRINT_PROBES:
-            response = await send_probe(client, config, prompt)
+            response = await send_probe(
+                client,
+                config,
+                prompt,
+                recon_report=envelope_report,
+            )
+            if (
+                envelope_report.model_detected
+                and not envelope_model
+            ):
+                envelope_model = (
+                    envelope_report.model_detected
+                )
+                detected_provider = (
+                    _normalise_provider_hint(
+                        envelope_model
+                    )
+                )
+                if detected_provider != "unknown":
+                    break
             provider = _detect_provider(response)
             if provider != "unknown":
                 detected_provider = provider
@@ -206,11 +251,33 @@ async def run_fingerprinting(
         if detected_provider == "unknown":
             for probe in BEHAVIOURAL_PROBES:
                 response = await send_probe(
-                    client, config, probe["prompt"]
+                    client,
+                    config,
+                    probe["prompt"],
+                    recon_report=envelope_report,
                 )
+                if (
+                    envelope_report.model_detected
+                    and not envelope_model
+                ):
+                    envelope_model = (
+                        envelope_report.model_detected
+                    )
+                    detected_provider = (
+                        _normalise_provider_hint(
+                            envelope_model
+                        )
+                    )
+                    if detected_provider != "unknown":
+                        break
                 if probe["indicator"] and response:
-                    if probe["indicator"] in response.lower():
-                        detected_provider = probe["provider"]
+                    if (
+                        probe["indicator"]
+                        in response.lower()
+                    ):
+                        detected_provider = probe[
+                            "provider"
+                        ]
                         break
                 elif response:
                     provider = _detect_provider(response)
@@ -220,27 +287,78 @@ async def run_fingerprinting(
 
     profile = MODEL_PROFILES.get(
         detected_provider,
-        MODEL_PROFILES["unknown"]
+        MODEL_PROFILES["unknown"],
     )
 
     result = FingerprintResult(
         provider=detected_provider,
-        model_family=detected_provider,
+        model_family=(
+            envelope_model or detected_provider
+        ),
         is_commercial=profile["is_commercial"],
         is_open_source=profile["is_open_source"],
         known_weaknesses=profile["known_weaknesses"],
-        recommended_categories=profile["recommended_categories"],
+        recommended_categories=profile[
+            "recommended_categories"
+        ],
     )
 
     log.info(
         "fingerprint_complete",
         provider=detected_provider,
+        model_family=result.model_family,
         is_commercial=result.is_commercial,
-        recommended_categories=result.recommended_categories,
+        recommended_categories=(
+            result.recommended_categories
+        ),
         notes=profile["notes"],
     )
 
     return result
+
+
+def _normalise_provider_hint(hint: str) -> str:
+    """
+    Map a model name or hint to a MODEL_PROFILES key.
+
+    Accepts provider names (openai) and concrete
+    model IDs from response envelopes (gpt-4o).
+    """
+    if not hint or hint == "unknown":
+        return "unknown"
+
+    if hint in MODEL_PROFILES:
+        return hint
+
+    lower = hint.lower()
+    if any(
+        token in lower
+        for token in ("gpt", "openai", "o1", "o3", "chatgpt")
+    ):
+        return "openai"
+    if any(
+        token in lower
+        for token in ("claude", "anthropic")
+    ):
+        return "anthropic"
+    if any(
+        token in lower
+        for token in ("gemini", "bard", "google")
+    ):
+        return "google"
+    if any(
+        token in lower for token in ("llama", "meta")
+    ):
+        return "meta"
+    if any(
+        token in lower
+        for token in ("mistral", "mixtral")
+    ):
+        return "mistral"
+    if "falcon" in lower:
+        return "tii"
+
+    return "unknown"
 
 
 def _detect_provider(response: str) -> str:

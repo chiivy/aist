@@ -38,7 +38,10 @@ from aist.evidence.collector import (
     run_llm_judge,
     detect_write_action_confirmation,
 )
-from aist.scanner.followup import run_followup_probe
+from aist.scanner.followup import (
+    run_followup_probe,
+    is_env_var_confirmation_finding,
+)
 
 log = get_logger(__name__)
 
@@ -338,11 +341,27 @@ async def run_direct_scanner(
                     )
 
                 if (
-                    evidence.llm_judge_partial
-                    and config.llm.enabled
+                    (
+                        evidence.llm_judge_partial
+                        or is_env_var_confirmation_finding(
+                            evidence
+                        )
+                    )
                     and config.scan.followup_enabled
                     and not config.scan.safe_mode
                 ):
+                    # Partial-judge follow-ups need an LLM
+                    # to generate probes; env-var escalation
+                    # uses fixed prompts and can run without.
+                    if (
+                        evidence.llm_judge_partial
+                        and not config.llm.enabled
+                        and not is_env_var_confirmation_finding(
+                            evidence
+                        )
+                    ):
+                        continue
+
                     followup_result = await run_followup_probe(
                         config=config,
                         original_evidence=evidence,

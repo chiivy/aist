@@ -1157,6 +1157,9 @@ def discover(target, mode, output, log_level, operator):
         fingerprint = await run_fingerprinting(
             config,
             initial_hint=recon_report.model_hint,
+            model_detected=getattr(
+                recon_report, "model_detected", ""
+            ),
         )
 
         return recon_report, discovery_result, fingerprint

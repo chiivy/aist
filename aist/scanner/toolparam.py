@@ -32,6 +32,10 @@ from aist.scanner.base import (
     get_payload_variants,
     run_payload_with_reproducibility,
 )
+from aist.scanner.followup import (
+    run_followup_probe,
+    is_env_var_confirmation_finding,
+)
 
 log = get_logger(__name__)
 
@@ -120,6 +124,45 @@ async def run_toolparam_scanner(
                 auth_manager=auth_manager,
             )
         )
+
+        # Context-aware follow-ups: escalate H6
+        # env-var confirmation into value extraction.
+        # Also pursue judge-partial findings.
+        if (
+            config.scan.followup_enabled
+            and not config.scan.safe_mode
+        ):
+            for evidence in list(evidence_items):
+                should_follow = (
+                    evidence.llm_judge_partial
+                    or is_env_var_confirmation_finding(
+                        evidence
+                    )
+                )
+                if not should_follow:
+                    continue
+
+                followup_result = await run_followup_probe(
+                    config=config,
+                    original_evidence=evidence,
+                    canary_token=canary_token or "",
+                    auth_manager=auth_manager,
+                )
+
+                if followup_result.all_evidence:
+                    evidence_items.extend(
+                        followup_result.all_evidence
+                    )
+
+                if followup_result.escalated:
+                    log.warning(
+                        "finding_escalated_via_followup",
+                        original_id=evidence.payload_id,
+                        depth=followup_result.depth_reached,
+                        stop_reason=(
+                            followup_result.stop_reason
+                        ),
+                    )
 
         all_evidence.extend(evidence_items)
         all_run_results[payload_id] = run_results

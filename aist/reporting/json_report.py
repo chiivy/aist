@@ -411,7 +411,10 @@ def _build_attack_surface(
 
     return {
         "target": recon_report.target,
-        "model_detected": recon_report.model_hint,
+        "model_detected": (
+            getattr(recon_report, "model_detected", "")
+            or recon_report.model_hint
+        ),
         "declared_tools": recon_report.declared_tools,
         "discovered_tools": getattr(
             discovery_result,

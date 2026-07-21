@@ -364,26 +364,113 @@ def _extract_endpoints(response: str) -> list:
 
 
 def _extract_agent_references(response: str) -> list:
-    """Detect references to other agents in response."""
+    """
+    Extract connected agent names from a response.
+
+    Prefers concrete agent names (e.g. "Billing
+    Agent", "specialist") over generic phrase
+    indicators so MA payloads can target real
+    discovered agents.
+    """
     if not response:
         return []
 
-    agent_indicators = [
-        "specialist agent",
-        "research agent",
-        "delegate",
-        "forward your request",
-        "another assistant",
-        "other agent",
-        "sub-agent",
-        "orchestrator",
+    found: list = []
+    seen_lower: set = set()
+
+    def _add(name: str) -> None:
+        cleaned = " ".join(name.split()).strip(" .,;:\"'")
+        if len(cleaned) < 2:
+            return
+        key = cleaned.lower()
+        fillers = {
+            "the", "an", "a", "another", "other",
+            "this", "that", "our", "your", "my",
+        }
+        if key in fillers:
+            return
+        if not key.endswith("agent"):
+            cleaned = f"{cleaned} Agent"
+            key = cleaned.lower()
+        if key in seen_lower:
+            return
+        if len(cleaned) > 60:
+            return
+        seen_lower.add(key)
+        found.append(cleaned)
+
+    # Named patterns: "the Billing Agent", "called Nexus"
+    name_patterns = [
+        r"(?:the\s+)?([A-Z][A-Za-z0-9_-]+"
+        r"(?:\s+[A-Z][A-Za-z0-9_-]+)?)\s+[Aa]gent",
+        r"[Aa]gent\s+(?:named|called)\s+"
+        r"['\"]?([A-Za-z][A-Za-z0-9_-]+)",
+        r"['\"]([A-Za-z][A-Za-z0-9 _-]{1,40})['\"]"
+        r"\s+[Aa]gent",
+        r"(?:forward(?:ed)?|delegate|route|send)\s+"
+        r"(?:(?:this|your|the)\s+)?(?:request|query|"
+        r"message)?\s*(?:to\s+)?(?:the\s+)?"
+        r"([A-Z][A-Za-z0-9_-]+(?:\s+[A-Z][A-Za-z0-9_-]+)?)"
+        r"\s+[Aa]gent",
     ]
-    found = []
-    response_lower = response.lower()
-    for indicator in agent_indicators:
-        if indicator in response_lower:
-            found.append(indicator)
+    for pattern in name_patterns:
+        for match in re.finditer(pattern, response):
+            _add(match.group(1))
+
+    # Fallback: architecture phrase indicators
+    if not found:
+        agent_indicators = [
+            "specialist agent",
+            "research agent",
+            "delegate",
+            "forward your request",
+            "another assistant",
+            "other agent",
+            "sub-agent",
+            "orchestrator",
+        ]
+        response_lower = response.lower()
+        for indicator in agent_indicators:
+            if indicator in response_lower:
+                found.append(indicator)
+
     return found
+
+
+def resolve_connected_agent_targets(
+    connected_agents: list,
+    connected_agents_response: str = "",
+) -> list:
+    """
+    Prefer concrete agent names for MA payloads.
+
+    Re-parses the raw recon response when available
+    so MA prompts use discovered names rather than
+    only generic indicators.
+    """
+    named = _extract_agent_references(
+        connected_agents_response or ""
+    )
+    # Prefer names that look like real labels
+    # (contain Agent suffix or Capitalised tokens)
+    concrete = [
+        n for n in named
+        if n.lower() not in {
+            "delegate",
+            "forward your request",
+            "another assistant",
+            "other agent",
+            "sub-agent",
+            "orchestrator",
+        }
+    ]
+    if concrete:
+        return concrete
+
+    if connected_agents:
+        return list(connected_agents)
+
+    return named
 
 
 def _indicates_rag(response: str) -> bool:
