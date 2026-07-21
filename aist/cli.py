@@ -13,6 +13,7 @@ import json as _json
 import re
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -1227,6 +1228,167 @@ def history(name, target):
             f"{med:>4} {score:>6.1f}{change}"
         )
         prev_crit = crit
+
+
+@main.command()
+@click.option(
+    "--report", "-r",
+    required=True,
+    help="Path to JSON report from a previous scan.",
+)
+@click.option(
+    "--finding", "-f",
+    required=True,
+    help="payload_id of the finding to retest, e.g. B5.",
+)
+@click.option(
+    "--operator",
+    default="aist",
+    help="Operator name for audit trail.",
+)
+@click.option(
+    "--runs",
+    default=1,
+    type=int,
+    help="Number of times to resend the payload.",
+)
+@click.option(
+    "--local-judge",
+    is_flag=True,
+    default=False,
+    help="Use local Ollama judge.",
+)
+@click.option(
+    "--output", "-o",
+    default=None,
+    help="Save retest result to a JSON file.",
+)
+@click.option(
+    "--log-level", "-l",
+    default="WARNING",
+    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]),
+    help="Logging verbosity.",
+)
+def retest(report, finding, operator, runs, local_judge, output, log_level):
+    """
+    Retest a single finding from a previous scan report.
+
+    Resends the exact payload to the same target and
+    compares the new judge result to the original.
+
+    Example:
+
+        aist retest --report reports/scan/report.json \\
+                    --finding B5 --operator chiivy
+    """
+    import json as _json2
+
+    setup_logging(log_level=log_level)
+
+    from aist.config import load_config
+    from aist.retest import FindingRetester
+    from aist.scan_profiles import category_label
+
+    config = load_config(operator=operator)
+    if local_judge:
+        config.scan.local_judge = True
+
+    try:
+        retester = FindingRetester(
+            report_path=report,
+            finding_id=finding,
+            config=config,
+            runs=runs,
+        )
+        loaded = retester.load_finding()
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+
+    category = loaded.get("payload_category", "")
+    label = category_label(category)
+    original_judge = loaded.get("llm_judge_success")
+    original_conf = loaded.get("llm_judge_confidence")
+    target = retester.load_report().get("target", "unknown")
+    scan_date = retester.load_report().get(
+        "generated_at", "unknown"
+    )[:10]
+
+    judge_str = (
+        "confirmed" if original_judge is True
+        else "not confirmed" if original_judge is False
+        else "no judge"
+    )
+
+    console.print(
+        f"\n[bold]RETEST: {finding} - {label}[/bold]"
+    )
+    console.print(f"Target: {target}")
+    console.print(
+        f"Original scan: {scan_date} | "
+        f"Judge: {judge_str} | "
+        f"Confidence: {original_conf}%"
+    )
+    console.print("[dim]Sending...[/dim]\n")
+
+    try:
+        result = asyncio.run(retester.run())
+    except Exception as exc:
+        console.print(
+            f"[red]Retest failed: "
+            f"{type(exc).__name__}: {exc}[/red]"
+        )
+        sys.exit(1)
+
+    new_judge_str = (
+        "confirmed" if result.new_judge_success is True
+        else "not confirmed"
+        if result.new_judge_success is False
+        else "string match only"
+    )
+    new_conf = (
+        f"{result.new_confidence}%"
+        if result.new_confidence is not None
+        else "n/a"
+    )
+    status = (
+        "[red]REPRODUCED[/red]"
+        if result.reproduced
+        else "[green]NOT REPRODUCED[/green]"
+    )
+
+    console.print(
+        f"Retest result: {new_judge_str} | "
+        f"Confidence: {new_conf}"
+    )
+    console.print(
+        f"Runs: {result.confirmed_runs}/"
+        f"{result.total_runs} confirmed"
+    )
+    console.print(f"Status: {status}\n")
+
+    if not result.reproduced:
+        console.print(
+            "[dim]Finding did not reproduce. "
+            "The agent may have been patched or "
+            "behaviour is non-deterministic. "
+            "Try --runs 3 for more confidence.[/dim]\n"
+        )
+
+    if output:
+        out_data = retester.to_dict(result)
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            _json2.dumps(out_data, indent=2),
+            encoding="utf-8",
+        )
+        console.print(
+            f"[green]Result saved: {output}[/green]"
+        )
 
 
 @main.command()
