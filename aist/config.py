@@ -83,6 +83,12 @@ class ScanConfig:
     fail_on: Optional[str] = None
     notify_slack: Optional[str] = None
     notify_email: Optional[str] = None
+    siem_export_enabled: bool = True
+    siem_formats: list = field(
+        default_factory=lambda: ["cef", "splunk"]
+    )
+    splunk_hec_url: Optional[str] = None
+    splunk_hec_token: Optional[str] = None
     scan_id: str = field(
         default_factory=lambda: uuid.uuid4().hex[:8]
     )
@@ -356,6 +362,10 @@ def load_config(
     config.scan.judge_model = os.getenv(
         "AIST_JUDGE_MODEL",
         "claude-haiku-4-5-20251001",
+    )
+    config.scan.splunk_hec_url = os.getenv("SPLUNK_HEC_URL")
+    config.scan.splunk_hec_token = os.getenv(
+        "SPLUNK_HEC_TOKEN"
     )
 
     # Jitter settings

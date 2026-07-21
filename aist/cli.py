@@ -31,6 +31,28 @@ console = Console()
 log = get_logger(__name__)
 
 
+def _parse_siem_formats(
+    siem: Optional[str],
+    no_siem: bool,
+) -> tuple[bool, list[str]]:
+    """Resolve SIEM export enablement and format list."""
+    if no_siem:
+        return False, []
+
+    if siem is None or siem.strip().lower() == "all":
+        return True, ["cef", "splunk"]
+
+    formats: list[str] = []
+    for part in siem.split(","):
+        token = part.strip().lower()
+        if token == "all":
+            return True, ["cef", "splunk"]
+        if token in ("cef", "splunk"):
+            formats.append(token)
+
+    return True, formats or ["cef", "splunk"]
+
+
 def print_testing_goals(goal_list: list[str]) -> None:
     """Print a summary of attack goals and mapped categories."""
     console.print("\n[bold]Testing Goals:[/bold]")
@@ -584,7 +606,25 @@ def main():
 @click.option(
     "--siem",
     default=None,
-    help="Optional SIEM endpoint URL for log shipping"
+    help="SIEM export formats: cef, splunk, all, or "
+         "comma-separated (default: all). "
+         "Legacy SIEM log shipping uses SIEM_ENDPOINT in .env.",
+)
+@click.option(
+    "--no-siem",
+    is_flag=True,
+    default=False,
+    help="Skip CEF and Splunk SIEM export files.",
+)
+@click.option(
+    "--splunk-url",
+    default=None,
+    help="Splunk HEC endpoint for direct event push.",
+)
+@click.option(
+    "--splunk-token",
+    default=None,
+    help="Splunk HEC token for direct event push.",
 )
 @click.option(
     "--expose-evidence",
@@ -781,7 +821,8 @@ def main():
 )
 def scan(
     target, tools, output, mode, runs,
-    log_level, siem, expose_evidence,
+    log_level, siem, no_siem, splunk_url, splunk_token,
+    expose_evidence,
     executive, categories, goals, operator,
     auth_type, auth_token, auth_header,
     auth_username, auth_password, auth_login_url,
@@ -919,7 +960,6 @@ def scan(
         mode=mode,
         runs=runs,
         log_level=log_level,
-        siem_endpoint=siem,
         expose_evidence=expose_evidence,
         executive_mode=executive,
         categories=(
@@ -929,6 +969,16 @@ def scan(
         goals=None,
         operator=operator,
     )
+
+    siem_enabled, siem_formats = _parse_siem_formats(
+        siem, no_siem
+    )
+    config.scan.siem_export_enabled = siem_enabled
+    config.scan.siem_formats = siem_formats
+    if splunk_url:
+        config.scan.splunk_hec_url = splunk_url
+    if splunk_token:
+        config.scan.splunk_hec_token = splunk_token
 
     if effective_goals and not categories_list:
         apply_cli_goals(config, effective_goals)

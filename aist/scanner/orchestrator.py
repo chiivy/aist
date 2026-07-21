@@ -227,6 +227,7 @@ async def run_full_scan(
         Dictionary with scan results summary
     """
     scan_start = datetime.utcnow()
+    siem_outputs: dict = {}
 
     scan_evidence = ScanEvidence(
         target=config.target.endpoint or "pending"
@@ -1082,6 +1083,31 @@ async def run_full_scan(
         save_sarif_report(sarif_report, sarif_output_path)
         progress.advance(report_task)
 
+        siem_outputs: dict = {}
+        if config.scan.siem_export_enabled:
+            from aist.reporting.siem import export_siem_with_push
+
+            try:
+                siem_outputs = await export_siem_with_push(
+                    scan_result=json_report,
+                    output_dir=str(scan_dir),
+                    formats=config.scan.siem_formats,
+                    splunk_url=(
+                        config.scan.splunk_hec_url
+                        or os.getenv("SPLUNK_HEC_URL")
+                    ),
+                    splunk_token=(
+                        config.scan.splunk_hec_token
+                        or os.getenv("SPLUNK_HEC_TOKEN")
+                    ),
+                )
+            except Exception as exc:
+                log.warning(
+                    "siem_export_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
     scan_duration = (
         datetime.utcnow() - scan_start
     ).total_seconds()
@@ -1098,6 +1124,7 @@ async def run_full_scan(
             scan_evidence.infrastructure_findings
         ),
         config=config,
+        siem_outputs=siem_outputs,
     )
 
     from aist.scan_profiles import get_completion_disclaimer
@@ -1391,6 +1418,7 @@ def _print_scan_summary(
     duration,
     infrastructure_issues: int = 0,
     config: Optional[AISTConfig] = None,
+    siem_outputs: Optional[dict] = None,
 ) -> None:
     """
     Print final scan summary to console.
@@ -1436,6 +1464,17 @@ def _print_scan_summary(
                 f"({short})\n"
             )
 
+    siem_lines = ""
+    if siem_outputs:
+        if siem_outputs.get("cef"):
+            siem_lines += (
+                f"  CEF:     {siem_outputs['cef']}\n"
+            )
+        if siem_outputs.get("splunk"):
+            siem_lines += (
+                f"  Splunk:  {siem_outputs['splunk']}\n"
+            )
+
     console.print(
         Panel.fit(
             f"[bold]Scan Complete[/bold] "
@@ -1454,7 +1493,8 @@ def _print_scan_summary(
             f"  Executive:  {executive_html_path}\n"
             f"  Redacted:   {redacted_path}\n"
             f"  JSON:       {html_path.replace('.html', '.json')}\n"
-            f"  SARIF:      {html_path.replace('.html', '.sarif')}",
+            f"  SARIF:      {html_path.replace('.html', '.sarif')}\n"
+            f"{siem_lines}",
             border_style="green" if not critical else "red",
         )
     )
