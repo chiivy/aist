@@ -1,5 +1,7 @@
 """Tests for scan profile presets."""
 
+import asyncio
+
 from aist.config import AISTConfig
 from aist.scan_profiles import (
     apply_profile_to_config,
@@ -8,6 +10,9 @@ from aist.scan_profiles import (
     get_profile_banner,
     get_profile_spec,
 )
+from aist.scanner.orchestrator import build_scanner_tasks
+from aist.scanner.generated_scanner import run_generated_scanner
+from aist.scanner.payload_generator import GeneratedPayload
 
 
 def test_quick_profile_settings():
@@ -48,6 +53,47 @@ def test_quick_profile_disables_gen():
     config = AISTConfig()
     apply_profile_to_config(config, profile_name="quick")
     assert config.scan.gen_enabled is False
+
+
+def test_quick_profile_excludes_gen_scanner_task():
+    """Quick profile must not schedule GEN scanner work."""
+    config = AISTConfig()
+    apply_profile_to_config(config, profile_name="quick")
+    task_names = [name for name, _ in build_scanner_tasks(config)]
+    assert "generated" not in task_names
+
+
+def test_quick_profile_produces_zero_gen_findings():
+    """GEN scanner returns no evidence when gen is disabled."""
+    config = AISTConfig()
+    apply_profile_to_config(config, profile_name="quick")
+    assert config.scan.gen_enabled is False
+
+    payloads = [
+        GeneratedPayload(
+            payload_id="GEN-1",
+            category="GEN",
+            prompt="test",
+            rationale="test",
+            sensitivity="high",
+            success_indicators=[],
+        )
+    ]
+    evidence, results = asyncio.run(
+        run_generated_scanner(
+            config,
+            payloads,
+            canary_token="token",
+        )
+    )
+
+    assert evidence == []
+    assert results == {}
+    gen_findings = [
+        item for item in evidence
+        if getattr(item, "payload_category", None) == "GEN"
+    ]
+    assert gen_findings == []
 
 
 def test_no_adaptive_recon_override():

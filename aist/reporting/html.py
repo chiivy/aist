@@ -911,6 +911,14 @@ def _build_findings(
             "llm_judge_confidence": evidence.llm_judge_confidence,
             "llm_judge_reasoning": evidence.llm_judge_reasoning,
             "llm_judge_partial": evidence.llm_judge_partial,
+            "validation_status": (
+                "Validated"
+                if evidence.llm_judge_success is True
+                else "Unvalidated"
+            ),
+            "validation_analysis": (
+                evidence.llm_judge_reasoning or ""
+            ),
             "disclosure_depth": evidence.disclosure_depth,
             "semantic_detection": (
                 (evidence.llm_judge_reasoning or "").startswith(
@@ -972,7 +980,7 @@ def _build_unvalidated_findings(
 ) -> list:
     """
     Build findings that matched detection patterns
-    but could not be validated by the LLM judge
+    but could not be validated automatically
     due to network / SSL errors.
     """
     unvalidated = []
@@ -982,7 +990,6 @@ def _build_unvalidated_findings(
     confidence_map = {
         c.payload_id: c for c in confidence_scores
     }
-    expose = config.scan.expose_evidence
 
     for evidence in scan_evidence.evidence_items:
         if not is_unvalidated_finding(evidence):
@@ -990,6 +997,14 @@ def _build_unvalidated_findings(
 
         severity = severity_map.get(evidence.payload_id)
         confidence = confidence_map.get(evidence.payload_id)
+
+        what_detected = []
+        for match in evidence.string_matches_found or []:
+            what_detected.append(f"String match: {match}")
+        for pattern in evidence.sensitive_patterns or []:
+            what_detected.append(
+                f"Sensitive pattern: {pattern}"
+            )
 
         unvalidated.append({
             "payload_id": evidence.payload_id,
@@ -1014,22 +1029,28 @@ def _build_unvalidated_findings(
             "unvalidated_badge": (
                 "Unvalidated - requires manual review"
             ),
-            "judge_failure_reason": getattr(
+            "validation_failure_reason": getattr(
                 evidence,
                 "judge_failure_reason",
-                "SSL error / network unavailable",
-            ),
-            "llm_judge_reasoning": (
+                None,
+            ) or "Validation unavailable (network error)",
+            "validation_analysis": (
                 evidence.llm_judge_reasoning or ""
             ),
             "string_matches": evidence.string_matches_found,
-            "prompt_sent": mask_for_report(
-                evidence.prompt_sent, expose
+            "sensitive_patterns": (
+                evidence.sensitive_patterns or []
             ),
-            "response_received": mask_for_report(
-                evidence.response_received, expose
-            ),
+            "what_detected": what_detected,
+            "prompt_sent": evidence.prompt_sent,
+            "response_received": evidence.response_received,
             "response_hash": evidence.response_hash,
+            "manual_review_prompt": (
+                "Review the response above. Does the agent "
+                "appear to have complied with the payload? "
+                "Did it disclose sensitive information? "
+                "If yes, treat this as a confirmed finding."
+            ),
         })
 
     return unvalidated
@@ -1523,21 +1544,10 @@ def _render_template(
         app_context_source=getattr(
             scan_evidence, "app_context_source", ""
         ),
-        judge_mode=(
-            "local"
+        validation_label=(
+            "Validation: Automated (local)"
             if getattr(config.scan, "local_judge", False)
-            else "cloud"
-        ),
-        judge_model=(
-            getattr(
-                config.scan,
-                "local_judge_model",
-                "llama3.1:8b",
-            )
-            if getattr(config.scan, "local_judge", False)
-            else config.llm.model
-            if getattr(config, "llm", None)
-            else "unknown"
+            else "Validation: Automated (cloud)"
         ),
         adaptive_recon=adaptive_recon or {},
         multiturn_narratives=multiturn_narratives or [],
@@ -1764,6 +1774,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .info-row {
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
     padding: 0.6rem 0;
     border-bottom: 1px solid #1e2533;
     font-size: 0.9rem;
@@ -1774,14 +1786,47 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .info-key {
     color: #64748b;
     font-weight: 500;
+    flex-shrink: 0;
+    min-width: 7rem;
   }
 
   .info-value {
     color: #e2e8f0;
     font-weight: 600;
     text-align: right;
-    max-width: 60%;
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  .info-value-mono {
+    font-family: monospace;
+    font-size: 0.75rem;
     word-break: break-all;
+  }
+
+  .app-context-section {
+    background: #1a1f2e;
+    border: 1px solid #2d3748;
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    margin-bottom: 3rem;
+  }
+
+  .app-context-label {
+    font-size: 0.85rem;
+    color: #64748b;
+    font-weight: 500;
+    margin-bottom: 0.75rem;
+  }
+
+  .app-context-body {
+    color: #cbd5e1;
+    font-size: 0.9rem;
+    line-height: 1.65;
+    overflow-wrap: break-word;
+    word-break: normal;
   }
 
   .attack-surface {
@@ -2601,7 +2646,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
 
-    <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 0.5rem;">
+    <div class="scan-info-card">
+      <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 0.5rem;">
         Scan Information
       </div>
       <div class="info-row">
@@ -2618,7 +2664,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
       <div class="info-row">
         <span class="info-key">Target</span>
-        <span class="info-value">{{ target }}</span>
+        <span class="info-value info-value-mono">{{ target }}</span>
       </div>
       <div class="info-row">
         <span class="info-key">Operator</span>
@@ -2635,10 +2681,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <span class="info-value">{{ total_payloads }}</span>
       </div>
       <div class="info-row">
-        <span class="info-key">Judge</span>
-        <span class="info-value">
-          {{ judge_mode | title }} ({{ judge_model }})
-        </span>
+        <span class="info-key">Validation</span>
+        <span class="info-value">{{ validation_label }}</span>
       </div>
       <div class="info-row">
         <span class="info-key">Total Findings</span>
@@ -2650,28 +2694,31 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <span class="info-value">{{ scan_goals | join(', ') }}</span>
       </div>
       {% endif %}
-      {% if app_context %}
-      <div class="info-row">
-        <span class="info-key">
-          Application Context
-          {% if app_context_source == "operator" %}
-          (operator-provided)
-          {% elif app_context_source == "auto-detected" %}
-          (auto-detected)
-          {% endif %}
-        </span>
-        <span class="info-value">{{ app_context }}</span>
-      </div>
-      {% endif %}
       <div class="info-row">
         <span class="info-key">Report Hash</span>
-        <span class="info-value" style="font-family: monospace; font-size: 0.75rem;">
+        <span class="info-value info-value-mono">
           {{ report_hash }}
         </span>
       </div>
     </div>
 
   </div>
+
+  {% if app_context %}
+  <div class="app-context-section">
+    <div class="app-context-label">
+      Application Context
+      {% if app_context_source == "operator" %}
+      (operator-provided)
+      {% elif app_context_source == "auto-detected" %}
+      (auto-detected)
+      {% elif app_context_source == "adaptive-recon" %}
+      (adaptive recon)
+      {% endif %}
+    </div>
+    <div class="app-context-body">{{ app_context }}</div>
+  </div>
+  {% endif %}
 
   <!-- Attack Surface -->
   {% if attack_surface %}
@@ -2966,52 +3013,72 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <!-- Unvalidated Findings -->
   {% if unvalidated_findings %}
   <div class="section-title">
-    Unvalidated Findings - Manual Review Required
+    Unvalidated Findings - Operator Review Required
     ({{ unvalidated_findings | length }})
   </div>
 
   <div class="unvalidated-banner">
-    These findings matched detection patterns
-    but could not be validated by the LLM judge
-    due to network errors. Manual review required
-    before including in client reports.
+    These findings matched detection patterns but automated
+    validation was unavailable (network timeout, connectivity,
+    or similar). Review each item below before treating it
+    as confirmed or excluding it from client reports.
   </div>
 
   {% for finding in unvalidated_findings %}
-  <div class="finding" style="border-color: #f59e0b;">
-    <div class="finding-header" onclick="this.parentElement.classList.toggle('open')">
+  <div class="finding open" style="border-color: #f59e0b;">
+    <div class="finding-header">
       <div>
         <span class="finding-id">{{ finding.payload_id }}</span>
         <span class="unvalidated-badge">
           {{ finding.unvalidated_badge }}
         </span>
-        <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem;">
-          Category {{ finding.category_label }}
-          {% if finding.string_matches %}
-          · Matches: {{ finding.string_matches | join(', ') }}
-          {% endif %}
+        <div style="font-size: 0.85rem; color: #e2e8f0; margin-top: 0.35rem;">
+          {{ finding.category_label }}
         </div>
+        {% if finding.severity_score is not none %}
+        <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem;">
+          Severity if confirmed:
+          <strong>{{ "%.1f"|format(finding.severity_score) }}</strong>
+          ({{ finding.severity_label }})
+        </div>
+        {% endif %}
       </div>
       <div>
         <span class="severity-badge severity-medium">
-          {{ finding.severity_label }}
+          Needs Review
         </span>
       </div>
     </div>
     <div class="finding-body">
-      <div class="finding-section-label">Judge Failure</div>
-      <p>{{ finding.judge_failure_reason }}</p>
-      {% if finding.llm_judge_reasoning %}
-      <p style="color: #94a3b8; margin-top: 0.5rem;">
-        {{ finding.llm_judge_reasoning }}
+      <div class="finding-section-label">What Was Detected</div>
+      {% if finding.what_detected %}
+      <ul style="margin: 0 0 1rem 1.25rem; color: #cbd5e1;">
+        {% for item in finding.what_detected %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p style="color: #94a3b8; margin-bottom: 1rem;">
+        Pattern-based detection flagged this response for review.
       </p>
       {% endif %}
-      <div class="finding-section-label" style="margin-top: 1rem;">
-        Prompt Sent
-      </div>
+
+      <div class="finding-section-label">Why Validation Failed</div>
+      <p style="margin-bottom: 1rem;">{{ finding.validation_failure_reason }}</p>
+      {% if finding.validation_analysis %}
+      <p style="color: #94a3b8; margin-bottom: 1rem;">
+        {{ finding.validation_analysis }}
+      </p>
+      {% endif %}
+
+      <div class="finding-section-label">Payload Sent</div>
       <pre class="code-block">{{ finding.prompt_sent }}</pre>
-      <div class="finding-section-label">Agent Response</div>
+      <div class="finding-section-label">Response Received</div>
       <pre class="code-block">{{ finding.response_received }}</pre>
+      <div class="finding-section-label">Manual Review</div>
+      <p style="color: #fcd34d; margin-top: 0.5rem;">
+        {{ finding.manual_review_prompt }}
+      </p>
     </div>
   </div>
   {% endfor %}
@@ -3070,6 +3137,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             {% if finding.needs_review %}
             <span class="needs-review-badge">Needs Review</span>
             {% endif %}
+            <span class="validation-status-badge">
+              {{ finding.validation_status }}
+            </span>
             {% if finding.llm_judge_partial %}
             <span class="partial-disclosure-badge">
               Partial Disclosure
@@ -3188,13 +3258,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="finding-section-label">Response Received</div>
           <div class="evidence-block">{{ finding.response_received }}</div>
 
-          <!-- LLM Judge -->
-          {% if finding.llm_judge_reasoning %}
-          <div class="finding-section-label">LLM Judge Analysis</div>
+          <!-- Automated validation -->
+          {% if finding.validation_analysis %}
+          <div class="finding-section-label">Validation Analysis</div>
           <div style="background: #0f1720; border: 1px solid #1e3a5f;
                       border-radius: 6px; padding: 1rem; font-size: 0.85rem;
                       color: #93c5fd; margin-bottom: 1rem;">
-            {{ finding.llm_judge_reasoning }}
+            {{ finding.validation_analysis }}
             <span style="color: #64748b; margin-left: 1rem;">
               Confidence: {{ finding.llm_judge_confidence }}%
             </span>
@@ -3221,7 +3291,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <tbody>
               {% if finding.compliance.owasp_llm %}
               <tr>
-                <td>OWASP LLM Top 10</td>
+                <td>OWASP Top 10 for AI Applications</td>
                 <td>{{ finding.compliance.owasp_llm.id }} -
                     {{ finding.compliance.owasp_llm.name }}</td>
               </tr>
@@ -3311,9 +3381,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
               <div class="evidence-block">
                 {{ fu.response_received }}
               </div>
-              {% if fu.llm_judge_reasoning %}
+              {% if fu.validation_analysis %}
               <div class="finding-section-label">
-                LLM Judge Analysis
+                Validation Analysis
               </div>
               <div style="background: #0f1720;
                           border: 1px solid #1e3a5f;
@@ -3321,7 +3391,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                           padding: 1rem;
                           font-size: 0.85rem;
                           color: #93c5fd;">
-                {{ fu.llm_judge_reasoning }}
+                {{ fu.validation_analysis }}
                 <span style="color: #64748b;
                              margin-left: 1rem;">
                   Confidence:
@@ -3417,7 +3487,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       {% if compliance_summary.owasp_violations %}
       <div class="framework-card">
-        <div class="framework-name">OWASP LLM Top 10</div>
+        <div class="framework-name">OWASP Top 10 for AI Applications</div>
         {% for v in compliance_summary.owasp_violations %}
         <span class="tag tag-orange">{{ v }}</span>
         {% endfor %}

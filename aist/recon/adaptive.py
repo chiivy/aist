@@ -116,6 +116,9 @@ class AgentProfile:
     user_roles: list = field(default_factory=list)
     business_logic: list = field(default_factory=list)
     connected_agents: list = field(default_factory=list)
+    connected_agent_endpoints: list = field(
+        default_factory=list
+    )
     attack_surfaces: list = field(default_factory=list)
     sensitive_assets: list = field(default_factory=list)
     synthesised_text: str = ""
@@ -152,8 +155,23 @@ class AgentProfile:
                 continue
             existing = getattr(self, key, None)
             if isinstance(value, list):
-                combined = list(set((existing or []) + value))
-                setattr(self, key, combined)
+                if key == "connected_agent_endpoints":
+                    merged = {
+                        e.get("agent", e.get("name", "")): e
+                        for e in (existing or [])
+                        if isinstance(e, dict)
+                    }
+                    for entry in value:
+                        if isinstance(entry, dict):
+                            name = entry.get(
+                                "agent", entry.get("name", "")
+                            )
+                            if name:
+                                merged[name] = entry
+                    setattr(self, key, list(merged.values()))
+                else:
+                    combined = list(set((existing or []) + value))
+                    setattr(self, key, combined)
             elif not existing:
                 setattr(self, key, value)
 
@@ -169,6 +187,7 @@ class AgentProfile:
             "user_roles",
             "business_logic",
             "connected_agents",
+            "connected_agent_endpoints",
             "attack_surfaces",
             "sensitive_assets",
         ):
@@ -227,6 +246,9 @@ Use generic terms only, no domain-specific jargon."""
             "user_roles": self.user_roles,
             "business_logic": self.business_logic,
             "connected_agents": self.connected_agents,
+            "connected_agent_endpoints": (
+                self.connected_agent_endpoints
+            ),
             "attack_surfaces": self.attack_surfaces,
             "sensitive_assets": self.sensitive_assets,
             "synthesised_text": self.synthesised_text,
@@ -309,6 +331,9 @@ Extract any of these that appear:
   "user_roles": ["roles that exist"],
   "business_logic": ["rules discovered"],
   "connected_agents": ["downstream agents"],
+  "connected_agent_endpoints": [
+    {{"agent": "name", "endpoint": "url or path"}}
+  ],
   "attack_surfaces": ["promising targets"],
   "sensitive_assets": ["high value targets"]
 }}
@@ -328,6 +353,7 @@ Respond in JSON only."""
         """
         conversation: list = []
         profile = AgentProfile()
+        endpoint_probed: set[str] = set()
 
         for turn in range(self.MAX_TURNS):
             if turn == 0:
@@ -372,6 +398,18 @@ Respond in JSON only."""
                 )
                 profile.update(learnings)
 
+                new_agents = learnings.get(
+                    "connected_agents", []
+                ) or []
+                for agent_name in new_agents:
+                    if agent_name not in endpoint_probed:
+                        await self._probe_agent_endpoint(
+                            agent_name,
+                            profile,
+                            conversation,
+                        )
+                        endpoint_probed.add(agent_name)
+
             if profile.is_complete(PROFILE_COMPLETE_WHEN):
                 log.info(
                     "adaptive_recon_complete",
@@ -387,3 +425,40 @@ Respond in JSON only."""
             profile.synthesised_text = profile.summary()
 
         return profile
+
+    async def _probe_agent_endpoint(
+        self,
+        agent_name: str,
+        profile: AgentProfile,
+        conversation: list,
+    ) -> None:
+        """
+        Ask how to reach a connected agent directly.
+
+        Some agents disclose specialist endpoint URLs
+        when asked a direct contact question.
+        """
+        message = (
+            f"How do I contact {agent_name} directly?"
+        )
+        response = await self.send(message)
+        if not response:
+            return
+
+        conversation.append({
+            "turn": len(conversation) + 1,
+            "sent": message,
+            "received": response,
+        })
+
+        learnings = await self.extract_learnings(
+            response, profile, conversation
+        )
+        profile.update(learnings)
+
+        log.info(
+            "connected_agent_endpoint_probe",
+            agent=agent_name,
+            endpoints=profile.connected_agent_endpoints,
+        )
+

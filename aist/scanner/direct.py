@@ -41,6 +41,8 @@ from aist.evidence.collector import (
 from aist.scanner.followup import (
     run_followup_probe,
     is_env_var_confirmation_finding,
+    followup_chain_depth,
+    MAX_FOLLOWUP_DEPTH,
 )
 
 log = get_logger(__name__)
@@ -365,6 +367,14 @@ async def run_direct_scanner(
                         and not is_env_var_confirmation_finding(
                             evidence
                         )
+                    ):
+                        continue
+
+                    if (
+                        followup_chain_depth(
+                            evidence.payload_id
+                        )
+                        >= MAX_FOLLOWUP_DEPTH
                     ):
                         continue
 

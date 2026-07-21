@@ -455,6 +455,17 @@ def get_judge(config: AISTConfig) -> Judge:
     return ClaudeJudge(config)
 
 
+def get_cloud_judge_model(config: AISTConfig) -> str:
+    """Return the cloud model used for automated validation."""
+    return (
+        getattr(config.scan, "judge_model", None)
+        or os.getenv(
+            "AIST_JUDGE_MODEL",
+            "claude-haiku-4-5-20251001",
+        )
+    )
+
+
 def get_judge_metadata(config: AISTConfig) -> dict:
     """
     Metadata for reports and console summary.
@@ -477,7 +488,7 @@ def get_judge_metadata(config: AISTConfig) -> dict:
             "judge_model": model,
         }
 
-    model = config.llm.model or "claude-sonnet-4-6"
+    model = get_cloud_judge_model(config)
     # Short display name for console
     short = model
     if "haiku" in model.lower():

@@ -35,6 +35,8 @@ from aist.scanner.base import (
 from aist.scanner.followup import (
     run_followup_probe,
     is_env_var_confirmation_finding,
+    followup_chain_depth,
+    MAX_FOLLOWUP_DEPTH,
 )
 
 log = get_logger(__name__)
@@ -140,6 +142,14 @@ async def run_toolparam_scanner(
                     )
                 )
                 if not should_follow:
+                    continue
+
+                if (
+                    followup_chain_depth(
+                        evidence.payload_id
+                    )
+                    >= MAX_FOLLOWUP_DEPTH
+                ):
                     continue
 
                 followup_result = await run_followup_probe(

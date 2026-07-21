@@ -221,13 +221,14 @@ def test_get_judge_selects_cloud() -> None:
     config = AISTConfig()
     config.scan.local_judge = False
     config.llm.enabled = True
-    config.llm.model = "claude-haiku-4-5"
+    config.scan.judge_model = "claude-haiku-4-5"
 
     assert use_local_judge(config) is False
     assert isinstance(get_judge(config), ClaudeJudge)
 
     meta = get_judge_metadata(config)
     assert meta["judge_mode"] == "cloud"
+    assert meta["judge_model"] == "claude-haiku-4-5"
     assert meta["judge_model_short"] == "claude-haiku"
 
 

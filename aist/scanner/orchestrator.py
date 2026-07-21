@@ -89,7 +89,53 @@ from aist.reporting.sarif import (
 )
 
 log = get_logger(__name__)
+
+REGISTERED_CATEGORY_SCANNERS = {
+    "A": "direct",
+    "B": "direct",
+    "C": "direct",
+    "D": "direct",
+    "E": "direct",
+    "F": "direct",
+    "BL": "direct",
+    "GEN": "generated",
+    "INDIRECT": "indirect",
+    "S": "multiturn",
+    "G": "guardrail",
+    "H": "toolparam",
+    "I": "output",
+    "J": "infrastructure",
+    "MA": "multiagent",
+}
 console = Console()
+
+
+def build_scanner_tasks(config: AISTConfig) -> list[tuple[str, str]]:
+    """
+    Build ordered scanner task list for a scan run.
+
+    GEN / context-aware probes are only included when
+    ``config.scan.gen_enabled`` is True.
+    """
+    scanner_tasks: list[tuple[str, str]] = [
+        ("direct", "Direct injection (A-F)"),
+    ]
+    if config.scan.gen_enabled:
+        scanner_tasks.append(
+            ("generated", "Context-aware probes (GEN)"),
+        )
+    scanner_tasks.extend([
+        ("indirect", "Indirect injection"),
+        ("multiturn", "Multi-turn sequences"),
+        ("guardrail", "Guardrail bypass (G)"),
+        ("toolparam", "Tool parameter injection (H)"),
+        ("output", "Output manipulation (I)"),
+        ("infrastructure", "Infrastructure checks (J)"),
+        ("canary", "Canary token check"),
+        ("multiagent", "Multi-agent traversal (MA)"),
+    ])
+    return scanner_tasks
+
 
 # Explicit severity for recon findings.
 # These bypass the discovery_multiplier since they
@@ -477,23 +523,25 @@ async def run_full_scan(
             config.scan.categories,
         )
 
-        scanner_tasks = [
-            ("direct", "Direct injection (A-F)"),
-        ]
-        if config.scan.gen_enabled:
-            scanner_tasks.append(
-                ("generated", "Context-aware probes (GEN)"),
-            )
-        scanner_tasks.extend([
-            ("indirect", "Indirect injection"),
-            ("multiturn", "Multi-turn sequences"),
-            ("guardrail", "Guardrail bypass (G)"),
-            ("toolparam", "Tool parameter injection (H)"),
-            ("output", "Output manipulation (I)"),
-            ("infrastructure", "Infrastructure checks (J)"),
-            ("canary", "Canary token check"),
-            ("multiagent", "Multi-agent traversal (MA)"),
+        missing_registered_categories = sorted([
+            category
+            for category in (categories or [])
+            if category not in REGISTERED_CATEGORY_SCANNERS
         ])
+        if missing_registered_categories:
+            log.warning(
+                "scanner_categories_unregistered",
+                categories=missing_registered_categories,
+            )
+        else:
+            log.info(
+                "scanner_categories_registered",
+                categories=categories or list(
+                    REGISTERED_CATEGORY_SCANNERS.keys()
+                ),
+            )
+
+        scanner_tasks = build_scanner_tasks(config)
 
         scan_task = progress.add_task(
             "[red]Running scanners...",
@@ -531,18 +579,21 @@ async def run_full_scan(
                     c in direct_cats
                     for c in (categories or [])
                 ):
-                    run_cats = categories
+                    if categories:
+                        run_cats = [
+                            c for c in categories
+                            if c in direct_cats
+                        ]
+                    else:
+                        run_cats = list(direct_cats)
                     if config.scan.safe_mode:
-                        if categories:
-                            run_cats = [
-                                c for c in categories
-                                if c not in {
-                                    "E", "H", "S", "V",
-                                    "INDIRECT",
-                                }
-                            ]
-                        else:
-                            run_cats = direct_cats
+                        run_cats = [
+                            c for c in run_cats
+                            if c not in {
+                                "E", "H", "S", "V",
+                                "INDIRECT",
+                            }
+                        ]
                     evidence, results = (
                         await run_direct_scanner(
                             config,
@@ -558,7 +609,10 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             elif scanner_name == "generated":
-                if generated_payloads:
+                if (
+                    config.scan.gen_enabled
+                    and generated_payloads
+                ):
                     evidence, results = await (
                         run_generated_scanner(
                             config,
@@ -721,6 +775,11 @@ async def run_full_scan(
                     ),
                 )
                 mt_results = await mt_scanner.run()
+                for mt_result in mt_results:
+                    if mt_result.evidence_items:
+                        all_evidence.extend(
+                            mt_result.evidence_items
+                        )
                 scan_evidence.multiturn_results = [
                     {
                         "scenario": r.scenario,
@@ -730,6 +789,7 @@ async def run_full_scan(
                         "evidence": r.evidence,
                         "conversation": r.conversation,
                         "side_effects": r.side_effects,
+                        "attack_paths": r.attack_paths,
                     }
                     for r in mt_results
                 ]

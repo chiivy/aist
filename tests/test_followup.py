@@ -9,6 +9,8 @@ from aist.scanner.followup import (
     generate_env_var_followups,
     is_env_var_confirmation_finding,
     run_followup_probe,
+    followup_chain_depth,
+    MAX_FOLLOWUP_DEPTH,
 )
 
 
@@ -153,3 +155,29 @@ def test_env_var_followup_runs_without_partial() -> None:
     assert result.stop_reason != "not_partial"
     assert result.stop_reason != "no_llm"
     assert result.stop_reason != "disabled"
+
+
+def test_followup_chain_depth_counting() -> None:
+    """Follow-up depth counts nested -FU segments."""
+    assert followup_chain_depth("D4") == 0
+    assert followup_chain_depth("D4-FU1") == 1
+    assert followup_chain_depth("D4-FU1-FU1-FU1") == 3
+
+
+def test_followup_stops_at_max_chain_depth() -> None:
+    """Nested follow-up chains stop at MAX_FOLLOWUP_DEPTH."""
+    config = AISTConfig()
+    config.llm.enabled = True
+
+    result = asyncio.run(
+        run_followup_probe(
+            config=config,
+            original_evidence=_make_evidence(
+                payload_id="D4-FU1-FU1-FU1",
+            ),
+            canary_token="token",
+        )
+    )
+
+    assert result.stop_reason == "max_chain_depth"
+    assert result.all_evidence == []

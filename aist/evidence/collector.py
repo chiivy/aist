@@ -891,6 +891,8 @@ async def _call_anthropic(
     as JSON, allowing graceful fallback to string
     matching for this payload.
     """
+    from aist.evidence.judge import get_cloud_judge_model
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",
@@ -900,7 +902,7 @@ async def _call_anthropic(
                 "content-type": "application/json",
             },
             json={
-                "model": config.llm.model,
+                "model": get_cloud_judge_model(config),
                 "max_tokens": 500,
                 "messages": [
                     {"role": "user", "content": prompt}

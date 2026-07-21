@@ -43,6 +43,16 @@ from aist.evidence.collector import (
 log = get_logger(__name__)
 
 MAX_FOLLOWUP_DEPTH = 3
+_FOLLOWUP_SEGMENT_RE = re.compile(r"-FU\d+")
+
+
+def followup_chain_depth(payload_id: str) -> int:
+    """
+    Count follow-up depth across a finding chain.
+
+    ``D4`` -> 0, ``D4-FU1`` -> 1, ``D4-FU1-FU1-FU1`` -> 3.
+    """
+    return len(_FOLLOWUP_SEGMENT_RE.findall(payload_id or ""))
 
 # H6 probes for these vars by default
 DEFAULT_ENV_VARS = [
@@ -294,6 +304,19 @@ async def run_followup_probe(
         original_payload_id=original_evidence.payload_id
     )
 
+    chain_depth = followup_chain_depth(
+        original_evidence.payload_id
+    )
+    if chain_depth >= MAX_FOLLOWUP_DEPTH:
+        result.stop_reason = "max_chain_depth"
+        log.info(
+            "followup_skipped_max_chain_depth",
+            payload_id=original_evidence.payload_id,
+            chain_depth=chain_depth,
+            max_depth=MAX_FOLLOWUP_DEPTH,
+        )
+        return result
+
     if not config.scan.followup_enabled:
         result.stop_reason = "disabled"
         return result
@@ -315,12 +338,20 @@ async def run_followup_probe(
         result.stop_reason = "no_llm"
         return result
 
-    max_depth = config.scan.max_followup_depth
+    remaining_depth = MAX_FOLLOWUP_DEPTH - chain_depth
+    max_depth = min(
+        config.scan.max_followup_depth,
+        remaining_depth,
+    )
+    if max_depth <= 0:
+        result.stop_reason = "max_chain_depth"
+        return result
 
     log.info(
         "followup_starting",
         payload_id=original_evidence.payload_id,
         max_depth=max_depth,
+        chain_depth=chain_depth,
         trigger=(
             "env_var_confirmation"
             if env_escalation

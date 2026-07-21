@@ -73,6 +73,8 @@ class ScanConfig:
     local_judge: bool = False
     local_judge_url: str = "http://localhost:11434"
     local_judge_model: str = "llama3.1:8b"
+    # Cloud validation model (separate from payload-generation LLM).
+    judge_model: str = "claude-haiku-4-5-20251001"
     profile: str = "standard"
     adaptive_recon: bool = True
     multiturn_enabled: bool = False
@@ -347,6 +349,13 @@ def load_config(
     config.scan.local_judge_model = os.getenv(
         "AIST_LOCAL_JUDGE_MODEL",
         "llama3.1:8b",
+    )
+    # Haiku is the default judge: fast and low cost.
+    # Sonnet (e.g. claude-sonnet-4-6) is available via
+    # AIST_JUDGE_MODEL but costs significantly more.
+    config.scan.judge_model = os.getenv(
+        "AIST_JUDGE_MODEL",
+        "claude-haiku-4-5-20251001",
     )
 
     # Jitter settings

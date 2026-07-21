@@ -16,7 +16,11 @@ from aist.evidence.collector import (
     collect_evidence,
     run_llm_judge,
 )
-from aist.scanner.followup import run_followup_probe
+from aist.scanner.followup import (
+    run_followup_probe,
+    followup_chain_depth,
+    MAX_FOLLOWUP_DEPTH,
+)
 from aist.scanner.payload_generator import (
     GeneratedPayload,
 )
@@ -47,6 +51,13 @@ async def run_generated_scanner(
 
     all_evidence = []
     all_run_results = {}
+
+    if not config.scan.gen_enabled:
+        log.info(
+            "generated_scanner_skipped",
+            reason="gen_disabled",
+        )
+        return all_evidence, all_run_results
 
     if not generated_payloads:
         return all_evidence, all_run_results
@@ -119,6 +130,10 @@ async def run_generated_scanner(
                 and config.llm.enabled
                 and config.scan.followup_enabled
                 and not config.scan.safe_mode
+                and followup_chain_depth(
+                    evidence.payload_id
+                )
+                < MAX_FOLLOWUP_DEPTH
             ):
                 followup_result = await run_followup_probe(
                     config=config,
