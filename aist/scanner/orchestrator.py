@@ -34,6 +34,9 @@ from aist.config import AISTConfig
 from aist.auth.manager import AuthManager
 from aist.evidence.collector import ScanEvidence, is_genuine_finding
 from aist.recon.probe import run_recon, domain_mapping_probes
+from aist.recon.adaptive import AdaptiveRecon, AgentProfile
+from aist.scanner.sideeffects import SideEffectsMonitor
+from aist.scanner.adaptive_multiturn import MultiTurnScanner
 from aist.recon.discovery import run_discovery
 from aist.recon.fingerprint import run_fingerprinting
 from aist.recon.streaming import truncate_if_oversized
@@ -206,6 +209,45 @@ async def run_full_scan(
             "target.[/yellow]\n"
         )
 
+    profile_name = getattr(config.scan, "profile", "standard")
+    adaptive_on = getattr(config.scan, "adaptive_recon", False)
+    multiturn_on = getattr(
+        config.scan, "multiturn_enabled", False
+    )
+    est_time = getattr(
+        config.scan, "estimated_time", "30-45 minutes"
+    )
+    console.print(
+        f"[bold]Profile:[/bold] {profile_name} | "
+        f"Adaptive recon: "
+        f"{'on' if adaptive_on else 'off'} | "
+        f"Multi-turn: {'on' if multiturn_on else 'off'} | "
+        f"Est. time: {est_time}\n"
+    )
+
+    if config.canary.canary_configured:
+        console.print(
+            "[green]Canary: configured "
+            "(external confirmation enabled)[/green]\n"
+        )
+    else:
+        console.print(
+            "[yellow]Canary: not configured (string match only)[/yellow]\n"
+            "[dim]Add AIST_CANARY_EMAIL to .env for external "
+            "confirmation of tool abuse findings.[/dim]\n"
+        )
+
+    side_effects_monitor = SideEffectsMonitor(
+        config.target.endpoint or "http://localhost/chat"
+    )
+    await side_effects_monitor.check_available()
+    if side_effects_monitor.available:
+        console.print(
+            "[green]Side-effects monitor: available[/green]\n"
+        )
+
+    agent_profile: Optional[AgentProfile] = None
+
     auth_manager = AuthManager(
         config.auth,
         target_config=config.target,
@@ -266,12 +308,50 @@ async def run_full_scan(
         recon_report = await run_recon(config)
         progress.advance(recon_task)
 
-        console.print(
-            "[dim]Mapping domain model...[/dim]"
-        )
-        recon_report = await domain_mapping_probes(
-            config, recon_report
-        )
+        if config.scan.adaptive_recon:
+            console.print(
+                "[dim]Running adaptive recon...[/dim]"
+            )
+            try:
+                agent_profile = await AdaptiveRecon(
+                    config
+                ).run()
+                adaptive_report = agent_profile.to_recon_report(
+                    config.target.endpoint
+                )
+                recon_report.discovered_tools = list(set(
+                    recon_report.discovered_tools
+                    + adaptive_report.discovered_tools
+                ))
+                recon_report.domain_mapping_responses = (
+                    adaptive_report.domain_mapping_responses
+                )
+                if adaptive_report.baseline_response:
+                    recon_report.baseline_response = (
+                        adaptive_report.baseline_response
+                    )
+                scan_evidence.adaptive_profile = (
+                    agent_profile.to_dict()
+                )
+            except Exception as exc:
+                log.warning(
+                    "adaptive_recon_failed",
+                    error_type=type(exc).__name__,
+                )
+                console.print(
+                    "[yellow]Adaptive recon failed. "
+                    "Falling back to static probes.[/yellow]"
+                )
+                recon_report = await domain_mapping_probes(
+                    config, recon_report
+                )
+        else:
+            console.print(
+                "[dim]Mapping domain model...[/dim]"
+            )
+            recon_report = await domain_mapping_probes(
+                config, recon_report
+            )
         progress.advance(recon_task)
 
         console.print(
@@ -319,18 +399,38 @@ async def run_full_scan(
         )
 
         if not config.target.app_context:
-            synthesised = await synthesise_agent_profile(
-                config=config,
-                recon_report=recon_report,
-                discovery_result=discovery_result,
-            )
-            if synthesised:
-                config.target.app_context = synthesised
-                scan_evidence.app_context_source = "auto-detected"
-                console.print(
-                    "\n[bold]Agent Profile (auto-detected):[/bold]\n"
-                    f"[dim]{synthesised}[/dim]\n"
+            if (
+                agent_profile
+                and agent_profile.synthesised_text
+            ):
+                config.target.app_context = (
+                    agent_profile.synthesised_text
                 )
+                scan_evidence.app_context_source = (
+                    "adaptive-recon"
+                )
+                console.print(
+                    "\n[bold]Agent Profile "
+                    "(adaptive recon):[/bold]\n"
+                    f"[dim]{agent_profile.synthesised_text}"
+                    f"[/dim]\n"
+                )
+            else:
+                synthesised = await synthesise_agent_profile(
+                    config=config,
+                    recon_report=recon_report,
+                    discovery_result=discovery_result,
+                )
+                if synthesised:
+                    config.target.app_context = synthesised
+                    scan_evidence.app_context_source = (
+                        "auto-detected"
+                    )
+                    console.print(
+                        "\n[bold]Agent Profile "
+                        "(auto-detected):[/bold]\n"
+                        f"[dim]{synthesised}[/dim]\n"
+                    )
         elif config.target.app_context:
             scan_evidence.app_context_source = "operator"
             console.print(
@@ -445,6 +545,9 @@ async def run_full_scan(
                             canary_token,
                             run_cats,
                             auth_manager=auth_manager,
+                            side_effects_monitor=(
+                                side_effects_monitor
+                            ),
                         )
                     )
                     all_evidence.extend(evidence)
@@ -583,6 +686,59 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             progress.advance(scan_task)
+
+        # Phase 2: Adaptive multi-turn scenarios
+        if config.scan.multiturn_enabled and not (
+            config.scan.safe_mode
+        ):
+            console.print(
+                "[dim]Running Phase 2 multi-turn "
+                "scenarios...[/dim]"
+            )
+            if not agent_profile:
+                agent_profile = AgentProfile()
+                agent_profile.tools_available = list(
+                    config.target.tools
+                )
+                agent_profile.connected_agents = list(
+                    getattr(
+                        discovery_result,
+                        "connected_agents",
+                        [],
+                    )
+                )
+            try:
+                mt_scanner = MultiTurnScanner(
+                    config=config,
+                    phase1_findings=all_evidence,
+                    agent_profile=agent_profile,
+                    side_effects_monitor=(
+                        side_effects_monitor
+                    ),
+                )
+                mt_results = await mt_scanner.run()
+                scan_evidence.multiturn_results = [
+                    {
+                        "scenario": r.scenario,
+                        "achieved": r.achieved,
+                        "turns": r.turns,
+                        "technique": r.technique,
+                        "evidence": r.evidence,
+                        "conversation": r.conversation,
+                        "side_effects": r.side_effects,
+                    }
+                    for r in mt_results
+                ]
+            except Exception as exc:
+                log.warning(
+                    "multiturn_phase_failed",
+                    error_type=type(exc).__name__,
+                )
+
+        scan_evidence.silent_compliance_findings = [
+            e for e in all_evidence
+            if getattr(e, "silent_compliance", False)
+        ]
 
         scan_evidence.evidence_items = all_evidence
         scan_evidence.total_payloads_sent = len(all_evidence)
@@ -908,7 +1064,13 @@ async def run_full_scan(
         for f in scan_evidence.infrastructure_findings
     ]
 
-    return {
+    scan_score = (
+        max(s.final_score for s in genuine_severity_scores)
+        if genuine_severity_scores
+        else 0.0
+    )
+
+    result = {
         "target": config.target.endpoint,
         "total_findings": len(genuine_severity_scores),
         "critical": sum(
@@ -927,6 +1089,7 @@ async def run_full_scan(
             1 for s in genuine_severity_scores
             if s.severity_label == "Low"
         ),
+        "score": scan_score,
         "canary_triggered": (
             scan_evidence.canary_triggered
         ),
@@ -940,7 +1103,20 @@ async def run_full_scan(
         "json_report": json_output_path,
         "sarif_report": sarif_output_path,
         "duration_seconds": scan_duration,
+        "findings": [
+            {
+                "payload_id": e.payload_id,
+                "category": e.payload_category,
+            }
+            for e in scan_evidence.evidence_items
+            if e.payload_category != "J"
+            and is_genuine_finding(e)
+        ],
     }
+
+    _send_scan_notifications(config, result)
+
+    return result
 
 
 def _print_recon_summary(
@@ -1113,6 +1289,40 @@ def _get_recommended_categories(
     return recommended
 
 
+def _send_scan_notifications(
+    config: AISTConfig,
+    result: dict,
+) -> None:
+    """Send optional scan completion notifications."""
+    if not (
+        config.scan.notify_slack
+        or config.scan.notify_email
+    ):
+        return
+
+    from aist.scheduler import Scheduler
+
+    sched = Scheduler()
+    summary = (
+        f"AIST Scan Complete\n"
+        f"Target: {result.get('target')}\n"
+        f"Score: {result.get('score', 0)}/10\n"
+        f"Critical: {result.get('critical', 0)}\n"
+        f"High: {result.get('high', 0)}\n"
+        f"Report: {result.get('html_report')}"
+    )
+    dummy_schedule = {
+        "name": "manual-scan",
+        "notify_email": config.scan.notify_email,
+        "notify_slack": config.scan.notify_slack,
+    }
+    sched.notify(
+        dummy_schedule,
+        result,
+        sched.diff(result, None),
+    )
+
+
 def _print_scan_summary(
     scan_evidence,
     severity_scores,
@@ -1230,7 +1440,7 @@ def _get_severity_base(
                          "BL1", "BL2", "BL3",
                          "MA1", "MA2", "MA3", "MA4",
                          "J5-admin", "J5-actuator_env",
-                         "J5-debug"]
+                         "J5-debug", "SILENT"]
     high_patterns = ["A1", "A2", "A3", "B1", "B2", "B3",
                      "B5", "B6", "C1", "C2", "C4", "D1",
                      "E5", "F1", "F2", "F3", "G1", "G2",

@@ -116,6 +116,19 @@ def generate_html_report(
         infrastructure_findings
     )
 
+    adaptive_recon = _build_adaptive_recon_section(
+        scan_evidence
+    )
+    multiturn_narratives = _build_multiturn_section(
+        scan_evidence
+    )
+    silent_findings = _build_silent_compliance_findings(
+        scan_evidence,
+        severity_scores,
+        confidence_scores,
+        config,
+    )
+
     # Render HTML
     display_findings = _group_findings_for_display(findings)
     html = _render_template(
@@ -129,6 +142,9 @@ def generate_html_report(
         artifact_cards=artifact_cards,
         infrastructure_findings=infrastructure_findings,
         infrastructure_summary=infrastructure_summary,
+        adaptive_recon=adaptive_recon,
+        multiturn_narratives=multiturn_narratives,
+        silent_findings=silent_findings,
     )
 
     # Sign report
@@ -1353,6 +1369,84 @@ def _build_attack_surface(
     }
 
 
+def _build_adaptive_recon_section(scan_evidence) -> dict:
+    """Build adaptive recon summary for HTML report."""
+    profile = getattr(scan_evidence, "adaptive_profile", None)
+    if not profile:
+        return {}
+    return {
+        "synthesised_text": profile.get(
+            "synthesised_text", ""
+        ),
+        "conversation": profile.get(
+            "raw_conversation", []
+        ),
+        "fields": {
+            k: v for k, v in profile.items()
+            if k not in (
+                "raw_conversation",
+                "synthesised_text",
+            ) and v
+        },
+    }
+
+
+def _build_multiturn_section(scan_evidence) -> list:
+    """Build Phase 2 multi-turn narratives for report."""
+    results = getattr(
+        scan_evidence, "multiturn_results", []
+    )
+    narratives = []
+    for r in results:
+        narratives.append({
+            "scenario": r.get("scenario", ""),
+            "achieved": r.get("achieved", False),
+            "turns": r.get("turns", 0),
+            "technique": r.get("technique"),
+            "evidence": r.get("evidence"),
+            "conversation": r.get("conversation", []),
+            "side_effects": r.get("side_effects", []),
+            "objective": r.get("scenario", "").replace(
+                "_", " "
+            ).title(),
+        })
+    return narratives
+
+
+def _build_silent_compliance_findings(
+    scan_evidence,
+    severity_scores,
+    confidence_scores,
+    config,
+) -> list:
+    """Build silent compliance findings for report."""
+    silent = getattr(
+        scan_evidence, "silent_compliance_findings", []
+    )
+    findings = []
+    for ev in silent:
+        findings.append({
+            "payload_id": ev.payload_id,
+            "severity_label": "Critical",
+            "note": (
+                "Agent performed action without "
+                "disclosing it in response"
+            ),
+            "evidence": getattr(
+                ev, "resource_validation_note", ""
+            ) or ev.llm_judge_reasoning,
+            "prompt_sent": mask_for_report(
+                ev.prompt_sent,
+                expose=config.scan.expose_evidence,
+            ),
+            "response_received": mask_for_report(
+                ev.response_received,
+                expose=config.scan.expose_evidence,
+            ),
+        })
+    return findings
+
+
 def _render_template(
     findings: list,
     summary: dict,
@@ -1364,6 +1458,9 @@ def _render_template(
     infrastructure_findings: list = None,
     infrastructure_summary: dict = None,
     unvalidated_findings: list = None,
+    adaptive_recon: dict = None,
+    multiturn_narratives: list = None,
+    silent_findings: list = None,
 ) -> str:
     """Render the HTML report template."""
     env = Environment(loader=BaseLoader())
@@ -1401,7 +1498,11 @@ def _render_template(
             scan_evidence, "generated_agent_context", None
         ),
         scan_goals=getattr(config.scan, "goals", None),
-        app_context=getattr(config.target, "app_context", ""),
+        app_context=getattr(
+            getattr(config, "target", None),
+            "app_context",
+            "",
+        ),
         app_context_source=getattr(
             scan_evidence, "app_context_source", ""
         ),
@@ -1418,6 +1519,14 @@ def _render_template(
             )
             if getattr(config.scan, "local_judge", False)
             else config.llm.model
+            if getattr(config, "llm", None)
+            else "unknown"
+        ),
+        adaptive_recon=adaptive_recon or {},
+        multiturn_narratives=multiturn_narratives or [],
+        silent_findings=silent_findings or [],
+        scan_profile=getattr(
+            config.scan, "profile", "standard"
         ),
     )
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -2705,6 +2814,122 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     No infrastructure artifacts discovered in agent responses
     during this scan.
   </p>
+  {% endif %}
+
+  <!-- Adaptive Recon Summary -->
+  {% if adaptive_recon %}
+  <div class="section-title">
+    Adaptive Recon Summary
+  </div>
+  {% if adaptive_recon.synthesised_text %}
+  <p style="margin-bottom: 1rem;">
+    {{ adaptive_recon.synthesised_text }}
+  </p>
+  {% endif %}
+  {% if adaptive_recon.fields %}
+  <div style="margin-bottom: 1rem;">
+    {% for key, val in adaptive_recon.fields.items() %}
+    <p><strong>{{ key }}:</strong> {{ val }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if adaptive_recon.conversation %}
+  <details style="margin-bottom: 2rem;">
+    <summary>Recon conversation transcript</summary>
+    {% for turn in adaptive_recon.conversation %}
+    <div style="margin: 0.75rem 0;">
+      <div class="finding-section-label">
+        Turn {{ turn.turn }}
+      </div>
+      <p><strong>Sent:</strong> {{ turn.sent }}</p>
+      <p><strong>Received:</strong> {{ turn.received }}</p>
+    </div>
+    {% endfor %}
+  </details>
+  {% endif %}
+  {% endif %}
+
+  <!-- Multi-Turn Attack Narratives -->
+  {% if multiturn_narratives %}
+  <div class="section-title">
+    Multi-Turn Attack Narratives
+    ({{ multiturn_narratives | length }})
+  </div>
+  {% for mt in multiturn_narratives %}
+  <div class="finding" style="margin-bottom: 1.5rem;">
+    <div class="finding-header">
+      <div>
+        <span class="finding-id">{{ mt.scenario }}</span>
+        <span class="severity-badge severity-{{
+          'critical' if mt.achieved else 'medium'
+        }}">
+          {{ 'ACHIEVED' if mt.achieved else 'NOT ACHIEVED' }}
+        </span>
+        <div style="font-size: 0.8rem; color: #94a3b8;">
+          Turns: {{ mt.turns }}
+          {% if mt.technique %}
+          · Technique: {{ mt.technique }}
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="finding-body">
+      {% if mt.evidence %}
+      <p><strong>Evidence:</strong> {{ mt.evidence }}</p>
+      {% endif %}
+      {% if mt.side_effects %}
+      <p><strong>Side effects:</strong>
+        {{ mt.side_effects | join('; ') }}</p>
+      {% endif %}
+      <details>
+        <summary>Conversation transcript</summary>
+        {% for turn in mt.conversation %}
+        <div style="margin: 0.5rem 0;">
+          <p><strong>Turn {{ turn.turn }} sent:</strong>
+            {{ turn.sent }}</p>
+          <p><strong>Received:</strong>
+            {{ turn.received }}</p>
+        </div>
+        {% endfor %}
+      </details>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <!-- Silent Compliance Findings -->
+  {% if silent_findings %}
+  <div class="section-title">
+    Silent Compliance Findings
+    ({{ silent_findings | length }})
+  </div>
+  <div class="unvalidated-banner">
+    Agent performed tool actions without disclosing
+    them in the conversational response.
+    These are always rated Critical.
+  </div>
+  {% for finding in silent_findings %}
+  <div class="finding" style="border-color: #dc2626;">
+    <div class="finding-header">
+      <div>
+        <span class="finding-id">{{ finding.payload_id }}</span>
+        <span class="severity-badge severity-critical">
+          Critical
+        </span>
+        <p style="color: #fca5a5; margin-top: 0.25rem;">
+          {{ finding.note }}
+        </p>
+      </div>
+    </div>
+    <div class="finding-body">
+      <p>{{ finding.evidence }}</p>
+      <div class="finding-section-label">Prompt Sent</div>
+      <pre class="code-block">{{ finding.prompt_sent }}</pre>
+      <div class="finding-section-label">Agent Response</div>
+      <pre class="code-block">{{ finding.response_received }}</pre>
+    </div>
+  </div>
+  {% endfor %}
   {% endif %}
 
   <!-- Unvalidated Findings -->

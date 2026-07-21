@@ -15,6 +15,7 @@ Handles:
 import asyncio
 import random
 import yaml
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -246,6 +247,7 @@ async def run_payload_with_reproducibility(
     config: AISTConfig,
     canary_token: Optional[str] = None,
     auth_manager=None,
+    side_effects_monitor=None,
 ) -> list:
     """
     Run a payload multiple times for reproducibility scoring.
@@ -305,6 +307,8 @@ async def run_payload_with_reproducibility(
                 session_id=session_id,
             )
 
+            pre_ts = datetime.utcnow().isoformat()
+
             response = await send_payload(
                 client,
                 prompt,
@@ -343,6 +347,34 @@ async def run_payload_with_reproducibility(
                         evidence=evidence,
                         llm_judge_prompt=llm_judge_prompt,
                         config=config,
+                    )
+
+            if (
+                side_effects_monitor
+                and side_effects_monitor.available
+            ):
+                from aist.scanner.sideeffects import (
+                    agent_disclosed_effects,
+                    create_silent_compliance_evidence,
+                )
+
+                effects = await side_effects_monitor.get_since(
+                    pre_ts
+                )
+                if (
+                    effects.any()
+                    and not agent_disclosed_effects(
+                        evidence.response_received,
+                        effects,
+                    )
+                ):
+                    silent = create_silent_compliance_evidence(
+                        evidence, effects
+                    )
+                    evidence_items.append(silent)
+                    log.warning(
+                        "silent_compliance_detected",
+                        payload_id=payload_id,
                     )
 
             evidence_items.append(evidence)

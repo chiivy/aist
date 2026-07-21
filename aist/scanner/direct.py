@@ -198,6 +198,7 @@ async def run_direct_scanner(
     canary_token: Optional[str] = None,
     categories: Optional[list] = None,
     auth_manager=None,
+    side_effects_monitor=None,
 ) -> tuple:
     """
     Run direct injection tests against target agent.
@@ -321,6 +322,9 @@ async def run_direct_scanner(
                         config=config,
                         canary_token=canary_token,
                         auth_manager=auth_manager,
+                        side_effects_monitor=(
+                            side_effects_monitor
+                        ),
                     )
                 )
 

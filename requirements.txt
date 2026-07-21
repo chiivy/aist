@@ -8,6 +8,10 @@ python-dotenv>=1.0.0
 rich>=13.0.0
 pyfiglet>=1.0.0
 
+# Scheduler
+schedule>=1.2.0
+apscheduler>=3.10.0
+
 # Optional: browser-based authentication (SSO/MFA)
 playwright>=1.40.0
 

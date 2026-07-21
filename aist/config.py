@@ -8,6 +8,7 @@ here. No credentials anywhere else in the codebase.
 
 import os
 import json as _json
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 from dotenv import load_dotenv
@@ -72,6 +73,16 @@ class ScanConfig:
     local_judge: bool = False
     local_judge_url: str = "http://localhost:11434"
     local_judge_model: str = "llama3.1:8b"
+    profile: str = "standard"
+    adaptive_recon: bool = True
+    multiturn_enabled: bool = False
+    estimated_time: str = "30-45 minutes"
+    fail_on: Optional[str] = None
+    notify_slack: Optional[str] = None
+    notify_email: Optional[str] = None
+    scan_id: str = field(
+        default_factory=lambda: uuid.uuid4().hex[:8]
+    )
 
 
 @dataclass
@@ -146,6 +157,7 @@ class CanaryConfig:
     test_user_id: str = "AIST-TEST-USER-001"
     enabled: bool = False
     behavioral_canaries_planted: bool = False
+    canary_configured: bool = False
 
 
 @dataclass
@@ -424,12 +436,14 @@ def load_config(
     canary_url = os.getenv("AIST_CANARY_URL")
     canary_email = os.getenv("AIST_CANARY_EMAIL")
     canary_domain = os.getenv("AIST_CANARY_DOMAIN")
+    scan_id = config.scan.scan_id
 
     if any([canary_url, canary_email, canary_domain]):
         config.canary.url = canary_url
         config.canary.email = canary_email
         config.canary.domain = canary_domain
         config.canary.enabled = True
+        config.canary.canary_configured = True
         log.info(
             "canary_configured",
             url=bool(canary_url),
@@ -437,12 +451,20 @@ def load_config(
             domain=bool(canary_domain),
         )
     else:
+        config.canary.url = (
+            f"http://aist-placeholder-{scan_id}.example.com"
+        )
+        config.canary.email = (
+            f"aist-test-{scan_id}@placeholder.com"
+        )
         config.canary.enabled = False
+        config.canary.canary_configured = False
         log.info(
             "no_canary_config",
             message="No canary configuration found. "
-                    "AIST will use LLM judge analysis only. "
-                    "See docs/canary_setup.md for setup options."
+                    "String matching only for tool abuse. "
+                    "Set AIST_CANARY_EMAIL in .env for "
+                    "external confirmation.",
         )
 
     # CT2/CT3/CT4 behavioural canaries require manually

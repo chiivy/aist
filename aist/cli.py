@@ -727,6 +727,43 @@ def main():
          "instead of the cloud LLM judge.",
 )
 @click.option(
+    "--profile",
+    default="standard",
+    type=click.Choice([
+        "quick", "standard", "deep", "targeted",
+    ]),
+    help="Scan profile controlling adaptive recon, "
+         "category scope, and Phase 2 multi-turn.",
+)
+@click.option(
+    "--fail-on",
+    default=None,
+    type=click.Choice(["critical", "high", "medium"]),
+    help="Exit code 1 if findings at this level.",
+)
+@click.option(
+    "--no-adaptive-recon",
+    is_flag=True,
+    default=False,
+    help="Force static recon probes regardless of profile.",
+)
+@click.option(
+    "--no-multiturn",
+    is_flag=True,
+    default=False,
+    help="Skip Phase 2 multi-turn scenarios.",
+)
+@click.option(
+    "--notify-slack",
+    default=None,
+    help="Slack webhook URL for scan completion.",
+)
+@click.option(
+    "--notify-email",
+    default=None,
+    help="Email address for scan completion.",
+)
+@click.option(
     "--redacted",
     is_flag=True,
     default=False,
@@ -751,7 +788,8 @@ def scan(
     message_field, body_fields, custom_headers,
     response_field, no_followup, app_context,
     reuse_session, session_file, local_judge,
-    redacted,
+    profile, fail_on, no_adaptive_recon, no_multiturn,
+    notify_slack, notify_email, redacted,
 ):
     """
     Run a full injection security scan against
@@ -932,6 +970,22 @@ def scan(
     if local_judge:
         config.scan.local_judge = True
 
+    from aist.scan_profiles import apply_profile_to_config
+
+    apply_profile_to_config(
+        config,
+        profile_name=profile,
+        categories_override=categories_list,
+        no_adaptive_recon=no_adaptive_recon,
+        no_multiturn=no_multiturn,
+    )
+    if fail_on:
+        config.scan.fail_on = fail_on
+    if notify_slack:
+        config.scan.notify_slack = notify_slack
+    if notify_email:
+        config.scan.notify_email = notify_email
+
     effective_app_context = app_context or wizard_app_context
     if effective_app_context:
         config.target.app_context = effective_app_context
@@ -1001,7 +1055,11 @@ def scan(
             duration=results["duration_seconds"],
         )
 
-        if results["critical"] > 0 or \
+        if config.scan.fail_on:
+            count = results.get(config.scan.fail_on, 0)
+            if count > 0:
+                sys.exit(1)
+        elif results["critical"] > 0 or \
                 results["canary_triggered"]:
             sys.exit(1)
 
@@ -1022,6 +1080,153 @@ def scan(
             error=str(e),
         )
         sys.exit(1)
+
+
+@main.group()
+def schedule():
+    """Manage scheduled scans."""
+    pass
+
+
+@schedule.command("add")
+@click.option("--target", "-t", required=True)
+@click.option("--cron", required=True)
+@click.option("--profile", default="standard")
+@click.option("--name", required=True)
+@click.option("--notify-email", default=None)
+@click.option("--notify-slack", default=None)
+@click.option(
+    "--fail-on",
+    default=None,
+    type=click.Choice(["critical", "high", "medium"]),
+)
+@click.option("--tools", default="")
+def schedule_add(
+    target, cron, profile, name,
+    notify_email, notify_slack, fail_on, tools,
+):
+    """Add a scheduled scan."""
+    from aist.scheduler import Schedule, Scheduler
+
+    tools_list = [
+        t.strip() for t in tools.split(",") if t.strip()
+    ]
+    sched = Schedule(
+        name=name,
+        target=target,
+        cron=cron,
+        profile=profile,
+        tools=tools_list,
+        notify_email=notify_email,
+        notify_slack=notify_slack,
+        fail_on=fail_on,
+    )
+    manager = Scheduler()
+    manager.add_schedule(sched)
+    console.print(
+        f"[green]Schedule '{name}' added.[/green] "
+        f"Next run: {manager.next_run(cron)}"
+    )
+
+
+@schedule.command("list")
+def schedule_list():
+    """List all scheduled scans."""
+    from aist.scheduler import Scheduler
+
+    manager = Scheduler()
+    schedules = manager.load_schedules()
+    if not schedules:
+        console.print("[dim]No schedules configured.[/dim]")
+        return
+    for name, s in schedules.items():
+        console.print(
+            f"  [cyan]{name}[/cyan]: {s.get('target')} "
+            f"({s.get('cron')}) profile={s.get('profile')}"
+        )
+
+
+@schedule.command("remove")
+@click.option("--name", required=True)
+def schedule_remove(name):
+    """Remove a scheduled scan."""
+    from aist.scheduler import Scheduler
+
+    manager = Scheduler()
+    if manager.remove_schedule(name):
+        console.print(
+            f"[green]Schedule '{name}' removed.[/green]"
+        )
+    else:
+        console.print(
+            f"[yellow]Schedule '{name}' not found.[/yellow]"
+        )
+
+
+@schedule.command("run-now")
+@click.option("--name", required=True)
+def schedule_run_now(name):
+    """Run a scheduled scan immediately."""
+    from aist.scheduler import Scheduler
+
+    manager = Scheduler()
+    schedules = manager.load_schedules()
+    if name not in schedules:
+        console.print(
+            f"[red]Schedule '{name}' not found.[/red]"
+        )
+        sys.exit(1)
+    sched = schedules[name]
+    sched["name"] = name
+    manager.execute(sched)
+
+
+@schedule.command("start")
+def schedule_start():
+    """Start the scheduler daemon."""
+    from aist.scheduler import Scheduler
+
+    console.print(
+        "[bold]AIST scheduler running.[/bold] "
+        "Ctrl+C to stop."
+    )
+    Scheduler().run_daemon()
+
+
+@main.command()
+@click.option("--name", default=None)
+@click.option("--target", default=None)
+def history(name, target):
+    """Show scan history from scheduled runs."""
+    from aist.scheduler import Scheduler
+
+    manager = Scheduler()
+    rows = manager.list_history(name=name, target=target)
+    if not rows:
+        console.print("[dim]No scan history found.[/dim]")
+        return
+
+    if name or target:
+        header = name or target
+        console.print(f"\n[bold]History:[/bold] {header}\n")
+
+    console.print(
+        f"{'Date':<20} {'Crit':>4} {'High':>4} "
+        f"{'Med':>4} {'Score':>6}"
+    )
+    prev_crit = None
+    for row in reversed(rows):
+        sched_name, tgt, prof, scan_date, crit, high, med, score = row
+        change = ""
+        if prev_crit is not None:
+            dc = crit - prev_crit
+            if dc:
+                change = f" {dc:+d}C"
+        console.print(
+            f"{scan_date[:10]:<20} {crit:>4} {high:>4} "
+            f"{med:>4} {score:>6.1f}{change}"
+        )
+        prev_crit = crit
 
 
 @main.command()
