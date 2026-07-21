@@ -16,7 +16,9 @@ are tailored to the agent's specific purpose,
 data access, and deployment context.
 """
 
+import asyncio
 import json
+import ssl
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -29,6 +31,30 @@ from aist.evidence.collector import _extract_json
 
 log = get_logger(__name__)
 console = Console()
+
+PROFILE_NETWORK_RETRIES = 3
+PROFILE_RETRY_WAIT_SECONDS = 5
+
+
+def _is_retryable_network_error(exc: BaseException) -> bool:
+    """True for SSL / connect errors worth retrying."""
+    if isinstance(
+        exc,
+        (
+            httpx.TransportError,
+            httpx.TimeoutException,
+            ssl.SSLError,
+            ConnectionError,
+            TimeoutError,
+            OSError,
+        ),
+    ):
+        return True
+    name = type(exc).__name__.lower()
+    return any(
+        token in name
+        for token in ("ssl", "connect", "timeout", "network")
+    )
 
 
 @dataclass
@@ -418,46 +444,72 @@ Just describe the agent as if briefing a
 pen tester who has never seen it before.
 """
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": config.llm.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": config.llm.model,
-                    "max_tokens": 300,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": synthesis_prompt,
-                        }
-                    ],
-                },
-                timeout=30,
+    last_error: Optional[BaseException] = None
+
+    for attempt in range(1, PROFILE_NETWORK_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": config.llm.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": config.llm.model,
+                        "max_tokens": 300,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": synthesis_prompt,
+                            }
+                        ],
+                    },
+                    timeout=30,
+                )
+                response.raise_for_status()
+                data = response.json()
+                profile = data["content"][0]["text"].strip()
+
+                log.info(
+                    "agent_profile_synthesised",
+                    profile_preview=profile[:100],
+                    recon_sources=len(recon_data),
+                )
+
+                return profile
+
+        except Exception as exc:
+            if not _is_retryable_network_error(exc):
+                log.warning(
+                    "profile_synthesis_error",
+                    error=str(exc),
+                )
+                return ""
+
+            last_error = exc
+            log.warning(
+                "profile_synthesis_network_retry",
+                attempt=attempt,
+                max_attempts=PROFILE_NETWORK_RETRIES,
+                error_type=type(exc).__name__,
             )
-            response.raise_for_status()
-            data = response.json()
-            profile = data["content"][0]["text"].strip()
+            if attempt < PROFILE_NETWORK_RETRIES:
+                await asyncio.sleep(
+                    PROFILE_RETRY_WAIT_SECONDS
+                )
 
-            log.info(
-                "agent_profile_synthesised",
-                profile_preview=profile[:100],
-                recon_sources=len(recon_data),
-            )
-
-            return profile
-
-    except Exception as exc:
-        log.warning(
-            "profile_synthesis_error",
-            error=str(exc),
-        )
-        return ""
-
+    log.warning(
+        "profile_synthesis_unavailable",
+        retries=PROFILE_NETWORK_RETRIES,
+        error_type=(
+            type(last_error).__name__
+            if last_error
+            else "NetworkError"
+        ),
+    )
+    return ""
 
 async def _call_generation_llm(
     prompt: str,

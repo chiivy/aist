@@ -30,7 +30,10 @@ from aist.compliance.mappings import (
 )
 from aist.remediation.generic import get_generic_guidance
 from aist.evidence.masking import mask_for_report
-from aist.evidence.collector import is_genuine_finding
+from aist.evidence.collector import (
+    is_genuine_finding,
+    is_unvalidated_finding,
+)
 
 log = get_logger(__name__)
 console = Console()
@@ -78,7 +81,14 @@ def generate_html_report(
         scan_completed_at=scan_completed_at,
     )
 
-    # Calculate summary stats
+    unvalidated_findings = _build_unvalidated_findings(
+        scan_evidence,
+        severity_scores,
+        confidence_scores,
+        config,
+    )
+
+    # Calculate summary stats (confirmed findings only)
     summary = _build_summary(findings, scan_evidence)
 
     # Build compliance summary
@@ -110,6 +120,7 @@ def generate_html_report(
     display_findings = _group_findings_for_display(findings)
     html = _render_template(
         findings=display_findings,
+        unvalidated_findings=unvalidated_findings,
         summary=summary,
         attack_surface=attack_surface,
         compliance_summary=compliance_summary,
@@ -929,6 +940,74 @@ def _build_findings(
     return findings
 
 
+def _build_unvalidated_findings(
+    scan_evidence,
+    severity_scores: list,
+    confidence_scores: list,
+    config,
+) -> list:
+    """
+    Build findings that matched detection patterns
+    but could not be validated by the LLM judge
+    due to network / SSL errors.
+    """
+    unvalidated = []
+    severity_map = {
+        s.payload_id: s for s in severity_scores
+    }
+    confidence_map = {
+        c.payload_id: c for c in confidence_scores
+    }
+    expose = config.scan.expose_evidence
+
+    for evidence in scan_evidence.evidence_items:
+        if not is_unvalidated_finding(evidence):
+            continue
+
+        severity = severity_map.get(evidence.payload_id)
+        confidence = confidence_map.get(evidence.payload_id)
+
+        unvalidated.append({
+            "payload_id": evidence.payload_id,
+            "payload_category": evidence.payload_category,
+            "severity_score": (
+                severity.final_score if severity else None
+            ),
+            "severity_label": (
+                severity.severity_label
+                if severity
+                else "Unvalidated"
+            ),
+            "confidence_score": (
+                confidence.confidence_score
+                if confidence
+                else None
+            ),
+            "needs_review": True,
+            "unvalidated_badge": (
+                "Unvalidated - requires manual review"
+            ),
+            "judge_failure_reason": getattr(
+                evidence,
+                "judge_failure_reason",
+                "SSL error / network unavailable",
+            ),
+            "llm_judge_reasoning": (
+                evidence.llm_judge_reasoning or ""
+            ),
+            "string_matches": evidence.string_matches_found,
+            "prompt_sent": mask_for_report(
+                evidence.prompt_sent, expose
+            ),
+            "response_received": mask_for_report(
+                evidence.response_received, expose
+            ),
+            "response_hash": evidence.response_hash,
+        })
+
+    return unvalidated
+
+
 def _group_findings_for_display(findings: list) -> list:
     """
     Nest follow-up findings under their parent finding cards.
@@ -1284,6 +1363,7 @@ def _render_template(
     artifact_cards: list = None,
     infrastructure_findings: list = None,
     infrastructure_summary: dict = None,
+    unvalidated_findings: list = None,
 ) -> str:
     """Render the HTML report template."""
     env = Environment(loader=BaseLoader())
@@ -1291,6 +1371,7 @@ def _render_template(
 
     return template.render(
         findings=findings,
+        unvalidated_findings=unvalidated_findings or [],
         summary=summary,
         attack_surface=attack_surface,
         compliance_summary=compliance_summary,
@@ -1414,6 +1495,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     max-width: 1400px;
     margin: 0 auto;
     padding: 2rem 3rem;
+  }
+
+  .unvalidated-banner {
+    background: #422006;
+    border: 1px solid #f59e0b;
+    border-left: 4px solid #f59e0b;
+    color: #fde68a;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+
+  .unvalidated-badge {
+    display: inline-block;
+    background: #78350f;
+    color: #fde68a;
+    border: 1px solid #f59e0b;
+    padding: 0.15rem 0.55rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
   }
 
   .section-title {
@@ -2601,6 +2705,60 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     No infrastructure artifacts discovered in agent responses
     during this scan.
   </p>
+  {% endif %}
+
+  <!-- Unvalidated Findings -->
+  {% if unvalidated_findings %}
+  <div class="section-title">
+    Unvalidated Findings - Manual Review Required
+    ({{ unvalidated_findings | length }})
+  </div>
+
+  <div class="unvalidated-banner">
+    These findings matched detection patterns
+    but could not be validated by the LLM judge
+    due to network errors. Manual review required
+    before including in client reports.
+  </div>
+
+  {% for finding in unvalidated_findings %}
+  <div class="finding" style="border-color: #f59e0b;">
+    <div class="finding-header" onclick="this.parentElement.classList.toggle('open')">
+      <div>
+        <span class="finding-id">{{ finding.payload_id }}</span>
+        <span class="unvalidated-badge">
+          {{ finding.unvalidated_badge }}
+        </span>
+        <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.25rem;">
+          Category {{ finding.payload_category }}
+          {% if finding.string_matches %}
+          · Matches: {{ finding.string_matches | join(', ') }}
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <span class="severity-badge severity-medium">
+          {{ finding.severity_label }}
+        </span>
+      </div>
+    </div>
+    <div class="finding-body">
+      <div class="finding-section-label">Judge Failure</div>
+      <p>{{ finding.judge_failure_reason }}</p>
+      {% if finding.llm_judge_reasoning %}
+      <p style="color: #94a3b8; margin-top: 0.5rem;">
+        {{ finding.llm_judge_reasoning }}
+      </p>
+      {% endif %}
+      <div class="finding-section-label" style="margin-top: 1rem;">
+        Prompt Sent
+      </div>
+      <pre class="code-block">{{ finding.prompt_sent }}</pre>
+      <div class="finding-section-label">Agent Response</div>
+      <pre class="code-block">{{ finding.response_received }}</pre>
+    </div>
+  </div>
+  {% endfor %}
   {% endif %}
 
   <!-- Findings -->

@@ -14,7 +14,9 @@ for higher accuracy on smaller models:
 
 from __future__ import annotations
 
+import asyncio
 import os
+import ssl
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
@@ -25,21 +27,47 @@ from aist.logger import get_logger
 
 log = get_logger(__name__)
 
+JUDGE_NETWORK_RETRIES = 3
+JUDGE_RETRY_WAIT_SECONDS = 5
+
 
 @dataclass
 class JudgeResult:
     """
     Structured verdict from any judge backend.
     """
-    success: bool
+    success: Optional[bool]
     partial: bool
     confidence: int
     reasoning: str
     complied: Optional[str] = None
+    needs_manual_review: bool = False
+    judge_failure_reason: Optional[str] = None
 
 
 class LocalJudgeUnavailableError(Exception):
     """Raised when Ollama cannot be reached."""
+
+
+def _is_retryable_network_error(exc: BaseException) -> bool:
+    """True for SSL / connect / transport failures worth retrying."""
+    if isinstance(
+        exc,
+        (
+            httpx.TransportError,
+            httpx.TimeoutException,
+            ssl.SSLError,
+            ConnectionError,
+            TimeoutError,
+            OSError,
+        ),
+    ):
+        return True
+    name = type(exc).__name__.lower()
+    return any(
+        token in name
+        for token in ("ssl", "connect", "timeout", "network")
+    )
 
 
 class Judge(Protocol):
@@ -261,6 +289,10 @@ class ClaudeJudge:
     """
     Cloud judge using Anthropic or OpenAI via the
     existing single-prompt JSON framework.
+
+    Retries on SSL / network errors up to three
+    times, then returns an unvalidated result
+    instead of raising.
     """
 
     def __init__(self, config: AISTConfig) -> None:
@@ -273,11 +305,11 @@ class ClaudeJudge:
         llm_judge_prompt: str = "",
     ) -> JudgeResult:
         """
-        Run the cloud LLM judge.
+        Run the cloud LLM judge with network retries.
 
-        Builds the full framework prompt from the
-        payload-specific judge context and parses
-        the JSON verdict into a JudgeResult.
+        On persistent SSL/connect failures returns
+        JudgeResult(success=None, needs_manual_review=True)
+        so the finding is retained for operator review.
         """
         from aist.evidence.collector import (
             Evidence,
@@ -299,37 +331,85 @@ class ClaudeJudge:
             evidence,
         )
 
-        if self.config.llm.provider == "anthropic":
-            verdict = await _call_anthropic(
-                full_prompt, self.config
-            )
-        else:
-            verdict = await _call_openai(
-                full_prompt, self.config
-            )
+        last_error: Optional[BaseException] = None
 
-        if not verdict:
-            return JudgeResult(
-                success=False,
-                partial=False,
-                confidence=0,
-                reasoning=(
-                    "Cloud judge response could not "
-                    "be parsed as JSON"
-                ),
-            )
+        for attempt in range(1, JUDGE_NETWORK_RETRIES + 1):
+            try:
+                if self.config.llm.provider == "anthropic":
+                    verdict = await _call_anthropic(
+                        full_prompt, self.config
+                    )
+                else:
+                    verdict = await _call_openai(
+                        full_prompt, self.config
+                    )
 
-        _apply_judge_verdict(evidence, verdict)
+                if not verdict:
+                    return JudgeResult(
+                        success=False,
+                        partial=False,
+                        confidence=0,
+                        reasoning=(
+                            "Cloud judge response could not "
+                            "be parsed as JSON"
+                        ),
+                    )
+
+                _apply_judge_verdict(evidence, verdict)
+                return JudgeResult(
+                    success=bool(
+                        evidence.llm_judge_success
+                    ),
+                    partial=bool(
+                        evidence.llm_judge_partial
+                    ),
+                    confidence=int(
+                        evidence.llm_judge_confidence or 0
+                    ),
+                    reasoning=(
+                        evidence.llm_judge_reasoning or ""
+                    ),
+                    complied=evidence.llm_judge_complied,
+                )
+
+            except Exception as exc:
+                if not _is_retryable_network_error(exc):
+                    raise
+
+                last_error = exc
+                log.warning(
+                    "cloud_judge_network_retry",
+                    attempt=attempt,
+                    max_attempts=JUDGE_NETWORK_RETRIES,
+                    error_type=type(exc).__name__,
+                )
+                if attempt < JUDGE_NETWORK_RETRIES:
+                    await asyncio.sleep(
+                        JUDGE_RETRY_WAIT_SECONDS
+                    )
+
+        error_name = (
+            type(last_error).__name__
+            if last_error
+            else "NetworkError"
+        )
+        log.error(
+            "cloud_judge_unavailable",
+            retries=JUDGE_NETWORK_RETRIES,
+            error_type=error_name,
+        )
         return JudgeResult(
-            success=bool(evidence.llm_judge_success),
-            partial=bool(evidence.llm_judge_partial),
-            confidence=int(
-                evidence.llm_judge_confidence or 0
-            ),
+            success=None,
+            partial=False,
+            confidence=0,
             reasoning=(
-                evidence.llm_judge_reasoning or ""
+                "Judge unavailable after 3 retries - "
+                "manual review required"
             ),
-            complied=evidence.llm_judge_complied,
+            needs_manual_review=True,
+            judge_failure_reason=(
+                "SSL error / network unavailable"
+            ),
         )
 
 

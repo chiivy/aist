@@ -56,6 +56,8 @@ class Evidence:
     llm_judge_reasoning: Optional[str] = None
     llm_judge_complied: Optional[str] = None
     disclosure_depth: Optional[str] = None
+    needs_manual_review: bool = False
+    judge_failure_reason: Optional[str] = None
 
     # Context-generated payload metadata
     gen_rationale: Optional[str] = None
@@ -174,7 +176,44 @@ def is_genuine_finding(evidence: Evidence) -> bool:
                 return False
         return True
 
+    # Judge unavailable after retries: string-match
+    # hits belong in the unvalidated section, not
+    # confirmed severity totals.
+    if (
+        getattr(evidence, "needs_manual_review", False)
+        and evidence.llm_judge_success is None
+        and not evidence.canary_leaked
+        and not evidence.credentials_detected
+        and not evidence.write_action_confirmed
+    ):
+        return False
+
     return evidence.string_match_success
+
+
+def is_unvalidated_finding(evidence: Evidence) -> bool:
+    """
+    True when pattern matching flagged a finding
+    but the LLM judge could not validate it due
+    to network / SSL failure.
+
+    These appear in a separate report section and
+    are excluded from confirmed severity totals.
+    """
+    if not getattr(evidence, "needs_manual_review", False):
+        return False
+    if evidence.llm_judge_success is not None:
+        return False
+    if evidence.payload_category == "J":
+        return False
+    # Always-genuine signals stay in confirmed findings
+    if (
+        evidence.canary_leaked
+        or evidence.credentials_detected
+        or evidence.write_action_confirmed
+    ):
+        return False
+    return bool(evidence.string_match_success)
 
 
 def _is_bl4_refusal(response_text: str) -> bool:
@@ -561,6 +600,10 @@ async def run_llm_judge(
     --local-judge / AIST_LOCAL_JUDGE is set,
     otherwise the cloud Claude/OpenAI judge.
 
+    On persistent network/SSL failure the finding
+    is retained with needs_manual_review=True
+    rather than discarded.
+
     Args:
         evidence:         Evidence object to analyse
         llm_judge_prompt: Payload-specific judge prompt
@@ -572,113 +615,91 @@ async def run_llm_judge(
     from aist.evidence.judge import (
         LocalJudgeUnavailableError,
         get_judge,
+        judge_enabled,
         use_local_judge,
     )
     from rich.console import Console
 
-    if use_local_judge(config):
-        judge = get_judge(config)
-        try:
-            result = await judge.judge(
-                payload=evidence.prompt_sent,
-                response=evidence.response_received,
-                llm_judge_prompt=llm_judge_prompt,
-            )
-            evidence.llm_judge_success = result.success
-            evidence.llm_judge_partial = result.partial
-            evidence.llm_judge_confidence = (
-                result.confidence
-            )
-            evidence.llm_judge_reasoning = (
-                result.reasoning
-            )
-            evidence.llm_judge_complied = result.complied
-
-            log.info(
-                "local_judge_complete",
-                payload_id=evidence.payload_id,
-                success=evidence.llm_judge_success,
-                confidence=evidence.llm_judge_confidence,
-                complied=evidence.llm_judge_complied,
-            )
-        except LocalJudgeUnavailableError as exc:
-            Console().print(
-                f"[bold red]{exc}[/bold red]"
-            )
-            log.error(
-                "local_judge_unavailable",
-                payload_id=evidence.payload_id,
-                error=str(exc),
-            )
-            evidence.llm_judge_success = None
-            evidence.string_match_success = False
-        except Exception as e:
-            log.warning(
-                "local_judge_error",
-                payload_id=evidence.payload_id,
-                error_type=type(e).__name__,
-            )
-            evidence.llm_judge_success = None
-            evidence.string_match_success = False
-        return evidence
-
-    if not config.llm.enabled:
+    if not judge_enabled(config):
         log.info(
             "llm_judge_skipped",
-            reason="No LLM API key configured",
+            reason="No judge backend configured",
             payload_id=evidence.payload_id,
         )
         return evidence
 
-    full_prompt = _build_full_judge_prompt(
-        llm_judge_prompt,
-        evidence,
-    )
+    judge = get_judge(config)
 
     try:
-        if config.llm.provider == "anthropic":
-            verdict = await _call_anthropic(
-                full_prompt, config
-            )
-        else:
-            verdict = await _call_openai(
-                full_prompt, config
-            )
-
-        if verdict:
-            _apply_judge_verdict(evidence, verdict)
-
-            log.info(
-                "llm_judge_complete",
-                payload_id=evidence.payload_id,
-                success=evidence.llm_judge_success,
-                confidence=evidence.llm_judge_confidence,
-                complied=evidence.llm_judge_complied,
-            )
-        else:
-            log.warning(
-                "llm_judge_unparseable",
-                payload_id=evidence.payload_id,
-                message="LLM judge response could not be "
-                        "parsed as JSON. Falling back to "
-                        "string matching for this payload.",
-            )
-
+        result = await judge.judge(
+            payload=evidence.prompt_sent,
+            response=evidence.response_received,
+            llm_judge_prompt=llm_judge_prompt,
+        )
+    except LocalJudgeUnavailableError as exc:
+        Console().print(
+            f"[bold red]{exc}[/bold red]"
+        )
+        log.error(
+            "local_judge_unavailable",
+            payload_id=evidence.payload_id,
+            error=str(exc),
+        )
+        evidence.llm_judge_success = None
+        evidence.needs_manual_review = True
+        evidence.judge_failure_reason = (
+            "SSL error / network unavailable"
+        )
+        evidence.llm_judge_reasoning = str(exc)
+        return evidence
     except Exception as e:
         log.warning(
             "llm_judge_error",
             payload_id=evidence.payload_id,
             error_type=type(e).__name__,
         )
-        if "Connect" in type(e).__name__:
-            # Network error -- judge could not reach
-            # the LLM API. This is not evidence of
-            # injection success or failure. Clear
-            # string_match_success so a keyword match
-            # in the response does not get promoted
-            # to a finding due to network unavailability.
-            evidence.llm_judge_success = None
-            evidence.string_match_success = False
+        evidence.llm_judge_success = None
+        evidence.needs_manual_review = True
+        evidence.judge_failure_reason = (
+            "SSL error / network unavailable"
+        )
+        evidence.llm_judge_reasoning = (
+            f"Judge error ({type(e).__name__}): "
+            "manual review required"
+        )
+        return evidence
+
+    if result.needs_manual_review or result.success is None:
+        evidence.llm_judge_success = None
+        evidence.llm_judge_partial = result.partial
+        evidence.llm_judge_confidence = result.confidence
+        evidence.llm_judge_reasoning = result.reasoning
+        evidence.needs_manual_review = True
+        evidence.judge_failure_reason = (
+            result.judge_failure_reason
+            or "SSL error / network unavailable"
+        )
+        log.warning(
+            "llm_judge_unvalidated",
+            payload_id=evidence.payload_id,
+            reason=evidence.judge_failure_reason,
+        )
+        return evidence
+
+    evidence.llm_judge_success = result.success
+    evidence.llm_judge_partial = result.partial
+    evidence.llm_judge_confidence = result.confidence
+    evidence.llm_judge_reasoning = result.reasoning
+    evidence.llm_judge_complied = result.complied
+
+    log.info(
+        "llm_judge_complete",
+        payload_id=evidence.payload_id,
+        success=evidence.llm_judge_success,
+        confidence=evidence.llm_judge_confidence,
+        complied=evidence.llm_judge_complied,
+        local=use_local_judge(config),
+    )
 
     return evidence
 
