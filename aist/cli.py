@@ -567,8 +567,8 @@ def main():
     default=None,
     help="Target agent endpoint URL. "
          "Omit to launch interactive setup wizard, "
-         "or when using --auth-type browser to capture "
-         "the endpoint from your browser session."
+         "or when using --auth-type browser / "
+         "--reuse-profile to load or capture the endpoint."
 )
 @click.option(
     "--tools", "-T",
@@ -921,7 +921,40 @@ def scan(
     wizard_goals = None
     wizard_app_context = None
 
-    if target is None and auth_type != "browser":
+    # Load target from saved profile when reusing without --target
+    if reuse_profile and not target:
+        from aist.auth.profile import load_request_profile
+        from aist.scanner.endpoint_classifier import (
+            EndpointClassifier,
+        )
+
+        profile_data = load_request_profile(profile_file) or {}
+        loaded = profile_data.get("primary_endpoint")
+        if loaded and EndpointClassifier().is_excluded_domain(
+            loaded
+        ):
+            loaded = None
+        if loaded:
+            target = loaded
+            click.echo(f"Target loaded from profile: {target}")
+        else:
+            click.echo(
+                "No valid target in profile. "
+                "Please provide --target."
+            )
+            sys.exit(1)
+
+    # Reuse-session implies browser auth -- skip wizard auth prompts
+    if reuse_session:
+        auth_type = "browser"
+
+    # Wizard only when no target and not using saved session/profile
+    if (
+        target is None
+        and not reuse_session
+        and not reuse_profile
+        and auth_type != "browser"
+    ):
         wizard = run_interactive_wizard()
         if not wizard.get("proceed", False):
             sys.exit(0)
