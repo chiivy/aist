@@ -41,15 +41,17 @@ def test_sanitise_for_sharing_redacts_email() -> None:
 def test_session_save_and_load(tmp_path) -> None:
     """Saved sessions can be loaded before expiry."""
     import asyncio
-    import os
 
-    path = str(tmp_path / "session.json")
+    session_path = str(tmp_path / "session.json")
+    profile_path = str(tmp_path / "profile.json")
     session = BrowserSession(
         chat_endpoint="https://app.example.com/chat",
-        cookies=[{"name": "sid", "value": "123"}],
+        cookies=[{"name": "sid", "value": "123", "maxAge": 7200}],
+        headers={"Authorization": "Bearer test"},
     )
-    assert asyncio.run(save_session(session, path)) is True
-    loaded = asyncio.run(load_session(path))
+    assert asyncio.run(
+        save_session(session, session_path, profile_path)
+    ) is True
+    loaded = asyncio.run(load_session(session_path, profile_path))
     assert loaded is not None
     assert loaded.chat_endpoint == session.chat_endpoint
-    os.remove(path)

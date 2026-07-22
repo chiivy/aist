@@ -1605,7 +1605,41 @@ def _render_template(
         scan_testing_summary=get_testing_summary(
             profile_name, scan_categories
         ),
+        operator_identity=_format_operator_identity(
+            scan_evidence, config
+        ),
     )
+
+
+def _format_operator_identity(scan_evidence, config) -> dict:
+    """Build assessment credentials block for reports."""
+    identity = getattr(scan_evidence, "operator_identity", {}) or {}
+    role = identity.get("role", "")
+    privilege = "standard"
+    role_lower = role.lower()
+    if any(token in role_lower for token in ("admin", "root", "super")):
+        privilege = "admin"
+    elif any(
+        token in role_lower
+        for token in ("elevated", "manager", "lead", "senior")
+    ):
+        privilege = "elevated"
+
+    return {
+        "username": identity.get("username", ""),
+        "role": role,
+        "scope": identity.get("scope", ""),
+        "tenant_id": identity.get("tenant_id", ""),
+        "source": identity.get("source", ""),
+        "privilege_level": privilege,
+        "context_note": (
+            f"Findings represent vulnerabilities accessible to a "
+            f"{role or 'standard'} level user. Higher privilege "
+            "accounts may expose additional attack surface."
+            if role
+            else ""
+        ),
+    }
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2761,6 +2795,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           {{ operator }}{% if organisation %} ({{ organisation }}){% endif %}
         </span>
       </div>
+      {% if operator_identity.username or operator_identity.role %}
+      <div class="info-row">
+        <span class="info-key">Assessment Credentials</span>
+        <span class="info-value">
+          Username: {{ operator_identity.username or 'unknown' }}<br>
+          Role: {{ operator_identity.role or 'unknown' }}<br>
+          Scope: {{ operator_identity.scope or 'not detected' }}<br>
+          Source: {{ operator_identity.source or 'session capture' }}
+        </span>
+      </div>
+      {% if operator_identity.context_note %}
+      <div class="info-row">
+        <span class="info-key">Privilege Context</span>
+        <span class="info-value">{{ operator_identity.context_note }}</span>
+      </div>
+      {% endif %}
+      {% endif %}
       <div class="info-row">
         <span class="info-key">Scan Date</span>
         <span class="info-value">{{ scan_date }}</span>

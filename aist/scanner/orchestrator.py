@@ -100,6 +100,69 @@ log = get_logger(__name__)
 console = Console()
 
 
+async def _run_endpoint_auth_tests(
+    config: AISTConfig,
+    auth_manager: AuthManager,
+    scan_evidence: ScanEvidence,
+) -> None:
+    """Test discovered endpoints for auth enforcement."""
+    from aist.auth.profile import load_request_profile
+    from aist.scanner.endpoint_tester import test_discovered_endpoints
+    from aist.scanner.infrastructure import InfraFinding
+
+    profile = load_request_profile(config.auth.profile_file) or {}
+    endpoints = profile.get("discovered_endpoints") or []
+    if not endpoints:
+        browser_session = auth_manager.get_browser_session()
+        if browser_session and browser_session.request_profile:
+            endpoints = browser_session.request_profile.get(
+                "discovered_endpoints", []
+            )
+
+    if not endpoints:
+        log.info("endpoint_tests_skipped", reason="no_endpoints")
+        return
+
+    console.print(
+        f"[dim]Testing {len(endpoints)} discovered endpoints "
+        "for auth enforcement...[/dim]"
+    )
+
+    findings = await test_discovered_endpoints(
+        config.target.endpoint,
+        endpoints,
+        auth_manager.get_headers(),
+        auth_manager.get_cookies(),
+        scan_delay=config.scan.scan_delay,
+    )
+
+    infra_findings = list(
+        getattr(scan_evidence, "infrastructure_findings", [])
+        or []
+    )
+    for item in findings:
+        infra_findings.append(
+            InfraFinding(
+                check_id=f"ENDPOINT-{item.check.upper()}",
+                name=f"Endpoint auth: {item.endpoint}",
+                severity=item.severity.lower(),
+                description=item.description,
+                evidence=item.evidence,
+                recommendation=(
+                    "Enforce authentication on all sensitive "
+                    "API endpoints."
+                ),
+                payload_id="ENDPOINT",
+            )
+        )
+    scan_evidence.infrastructure_findings = infra_findings
+    if findings:
+        console.print(
+            f"[yellow]Endpoint auth tests: "
+            f"{len(findings)} issue(s) found[/yellow]"
+        )
+
+
 def build_scanner_tasks(config: AISTConfig) -> list[tuple[str, str]]:
     """
     Build ordered scanner task list for a scan run.
@@ -283,6 +346,10 @@ async def run_full_scan(
         config.auth,
         target_config=config.target,
     )
+
+    if config.auth.reuse_profile:
+        auth_manager.apply_browser_session_to_target()
+
     auth_ok = await auth_manager.authenticate()
     if not auth_ok:
         console.print(
@@ -320,6 +387,34 @@ async def run_full_scan(
         console.print(
             f"[green]✓ Target endpoint captured: "
             f"{config.target.endpoint}[/green]"
+        )
+
+    browser_session = auth_manager.get_browser_session()
+    if browser_session and browser_session.operator_identity:
+        scan_evidence.operator_identity = (
+            browser_session.operator_identity
+        )
+    elif config.auth.reuse_session:
+        try:
+            from aist.auth.session import load_auth_session
+
+            auth_data = load_auth_session(config.auth.session_file)
+            if auth_data and auth_data.get("operator_identity"):
+                scan_evidence.operator_identity = auth_data[
+                    "operator_identity"
+                ]
+        except ValueError:
+            pass
+
+    if (
+        config.auth.test_endpoints
+        and not config.scan.safe_mode
+        and config.target.endpoint
+    ):
+        await _run_endpoint_auth_tests(
+            config,
+            auth_manager,
+            scan_evidence,
         )
 
     with Progress(

@@ -123,6 +123,9 @@ class ScanEvidence:
     silent_compliance_findings: list = field(
         default_factory=list
     )
+    operator_identity: dict = field(default_factory=dict)
+    validation_blocked_count: int = 0
+    validation_blocked_categories: list = field(default_factory=list)
 
 
 def is_genuine_finding(evidence: Evidence) -> bool:
@@ -450,6 +453,7 @@ async def collect_evidence(
     """
     from aist.evidence.patterns import detect_patterns, extract_artifacts
     from aist.evidence.masking import mask_for_storage
+    from aist.evidence.secret_detector import scan_response_secrets
 
     # Step 1: Assemble response handling streaming
     assembled = await collect_response(
@@ -514,6 +518,14 @@ async def collect_evidence(
 
     # Step 4: Detect sensitive patterns
     pattern_results = detect_patterns(response_text)
+    secret_findings = scan_response_secrets(response_text)
+    for secret in secret_findings:
+        label = f"SECRET_IN_RESPONSE:{secret.pattern}"
+        pattern_results.setdefault("patterns_found", []).append(
+            label
+        )
+        if secret.severity == "High":
+            pattern_results["credentials"] = True
 
     # Extract infrastructure artifacts
     artifacts = extract_artifacts(response_text)

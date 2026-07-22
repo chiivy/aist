@@ -45,6 +45,11 @@ class AuthConfig:
     browser_session: Optional[Any] = None
     reuse_session: bool = False
     session_file: str = ".aist_session.json"
+    capture_profile: bool = True
+    reuse_profile: bool = False
+    profile_file: str = ".aist_request_profile.json"
+    test_endpoints: bool = False
+    response_type: Optional[str] = None
 
 
 class AuthManager:
@@ -132,17 +137,37 @@ class AuthManager:
 
     def apply_browser_session_to_target(self) -> None:
         """Apply captured request format to target config."""
+        from aist.auth.profile import (
+            apply_profile_to_target,
+            load_request_profile,
+        )
+
         session = self._browser_session
         target = self.target_config
-        if not session or not target:
+        if not target:
             return
 
-        if session.message_field:
-            target.message_field = session.message_field
-        if session.extra_body_fields:
-            target.custom_body_fields = dict(
-                session.extra_body_fields
-            )
+        if session and session.request_profile:
+            apply_profile_to_target(session.request_profile, target)
+        elif session:
+            if session.message_field:
+                target.message_field = session.message_field
+            if session.extra_body_fields:
+                target.custom_body_fields = dict(
+                    session.extra_body_fields
+                )
+            if session.response_field:
+                target.response_field = session.response_field
+            if session.response_type:
+                target.response_type = session.response_type
+
+        if self.config.response_type:
+            target.response_type = self.config.response_type
+
+        if self.config.reuse_profile:
+            profile = load_request_profile(self.config.profile_file)
+            if profile:
+                apply_profile_to_target(profile, target)
 
     async def load_saved_session(
         self,
@@ -151,7 +176,13 @@ class AuthManager:
         """Load a previously saved browser session from disk."""
         from aist.auth.browser import load_session
 
-        session = await load_session(filepath)
+        profile_path = self.config.profile_file
+        try:
+            session = await load_session(filepath, profile_path)
+        except ValueError as exc:
+            log.error("session_expired", message=str(exc))
+            return False
+
         if not session:
             return False
 
@@ -360,6 +391,8 @@ class AuthManager:
         session = await capture_browser_session(
             url,
             session_file=self.config.session_file,
+            profile_file=self.config.profile_file,
+            capture_profile=self.config.capture_profile,
         )
 
         if not session:

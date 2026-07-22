@@ -92,6 +92,8 @@ class ScanConfig:
     scan_id: str = field(
         default_factory=lambda: uuid.uuid4().hex[:8]
     )
+    scan_delay: float = 1.0
+    bypass_validation: bool = False
 
 
 @dataclass
@@ -111,6 +113,8 @@ class TargetConfig:
         default_factory=dict
     )
     response_field: str = ""
+    response_type: str = "json"
+    streaming: bool = False
     app_context: str = ""
     # Optional description of what the target
     # agent does, its purpose, what data it
@@ -389,6 +393,18 @@ def load_config(
         "AIST_SAFE_MODE", "false"
     ).lower() == "true"
 
+    config.scan.scan_delay = float(
+        os.getenv("AIST_SCAN_DELAY", "1.0")
+    )
+    if config.scan.safe_mode:
+        config.scan.scan_delay = float(
+            os.getenv("AIST_SCAN_DELAY", "3.0")
+        )
+
+    config.scan.bypass_validation = os.getenv(
+        "AIST_BYPASS_VALIDATION", "false"
+    ).lower() == "true"
+
     # Target config
     config.target.endpoint = (
         target_endpoint or
@@ -418,6 +434,9 @@ def load_config(
 
     config.target.response_field = os.getenv(
         "AIST_RESPONSE_FIELD", ""
+    )
+    config.target.response_type = os.getenv(
+        "AIST_RESPONSE_TYPE", "json"
     )
     config.target.app_context = os.getenv(
         "AIST_APP_CONTEXT", ""

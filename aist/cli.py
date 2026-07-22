@@ -760,6 +760,50 @@ def main():
          "Default: .aist_session.json",
 )
 @click.option(
+    "--capture-profile/--no-capture-profile",
+    default=True,
+    help="Observe browser traffic after login to "
+         "capture request format (default: on).",
+)
+@click.option(
+    "--reuse-profile",
+    is_flag=True,
+    default=False,
+    help="Load request format from "
+         ".aist_request_profile.json without browser.",
+)
+@click.option(
+    "--profile-file",
+    default=".aist_request_profile.json",
+    help="Path to saved request profile file.",
+)
+@click.option(
+    "--response-type",
+    default=None,
+    type=click.Choice(["json", "sse", "ndjson", "websocket"]),
+    help="Override auto-detected agent response type.",
+)
+@click.option(
+    "--scan-delay",
+    default=None,
+    type=float,
+    help="Seconds between requests. Default: 1. "
+         "Use 3+ on production. Use 0 for local agents only.",
+)
+@click.option(
+    "--test-endpoints",
+    is_flag=True,
+    default=False,
+    help="Test discovered endpoints for auth enforcement "
+         "(GET/OPTIONS only).",
+)
+@click.option(
+    "--bypass-validation",
+    is_flag=True,
+    default=False,
+    help="When 400 received, attempt encoding bypass variants.",
+)
+@click.option(
     "--local-judge",
     is_flag=True,
     default=False,
@@ -829,7 +873,9 @@ def scan(
     auth_tenant_id, auth_client_id, safe_mode,
     message_field, body_fields, custom_headers,
     response_field, no_followup, app_context,
-    reuse_session, session_file, local_judge,
+    reuse_session, session_file, capture_profile, reuse_profile,
+    profile_file, response_type, scan_delay, test_endpoints,
+    bypass_validation, local_judge,
     profile, fail_on, no_adaptive_recon, no_multiturn,
     notify_slack, notify_email, redacted,
 ):
@@ -1004,6 +1050,21 @@ def scan(
         config.auth.reuse_session = True
         config.auth.session_file = session_file
         config.auth.auth_type = "browser"
+
+    config.auth.capture_profile = capture_profile
+    config.auth.reuse_profile = reuse_profile
+    config.auth.profile_file = profile_file
+    config.auth.test_endpoints = test_endpoints
+    if response_type:
+        config.auth.response_type = response_type
+        config.target.response_type = response_type
+
+    if scan_delay is None:
+        config.scan.scan_delay = 3.0 if safe_mode else 1.0
+    else:
+        config.scan.scan_delay = scan_delay
+
+    config.scan.bypass_validation = bypass_validation
 
     if auth_cookie_value:
         config.auth.cookie_name = auth_cookie_name or "session"

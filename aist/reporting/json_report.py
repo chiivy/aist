@@ -32,6 +32,29 @@ from aist.reporting.objectives import (
 log = get_logger(__name__)
 
 
+def _build_operator_identity(scan_evidence) -> dict:
+    """Build operator identity block for JSON report."""
+    identity = getattr(scan_evidence, "operator_identity", {}) or {}
+    role = identity.get("role", "")
+    privilege = "standard"
+    role_lower = role.lower()
+    if any(token in role_lower for token in ("admin", "root", "super")):
+        privilege = "admin"
+    elif any(
+        token in role_lower
+        for token in ("elevated", "manager", "lead", "senior")
+    ):
+        privilege = "elevated"
+    return {
+        "username": identity.get("username", ""),
+        "role": role,
+        "scope": identity.get("scope", ""),
+        "tenant_id": identity.get("tenant_id", ""),
+        "source": identity.get("source", ""),
+        "privilege_level": privilege,
+    }
+
+
 def generate_json_report(
     scan_evidence,
     recon_report,
@@ -121,6 +144,8 @@ def generate_json_report(
         **infra_counts,
     }
 
+    operator_identity = _build_operator_identity(scan_evidence)
+
     report = {
         "aist_version": "1.0",
         "report_type": "full_scan",
@@ -176,6 +201,7 @@ def generate_json_report(
             "app_context_source": getattr(
                 scan_evidence, "app_context_source", ""
             ),
+            "operator_identity": operator_identity,
         },
         "report_hash": "PLACEHOLDER",
     }

@@ -28,6 +28,17 @@ from aist.evidence.collector import (
     collect_evidence,
     run_llm_judge,
 )
+from aist.evidence.secret_detector import scan_response_secrets
+from aist.http.client import (
+    apply_scan_delay,
+    handle_rate_limit,
+    warn_auth_failure,
+)
+from aist.scanner.validation_bypass import (
+    get_active_bypass,
+    set_active_bypass,
+    try_validation_bypass,
+)
 
 log = get_logger(__name__)
 
@@ -154,6 +165,7 @@ async def send_payload(
     auth_headers: dict = None,
     auth_cookies: dict = None,
     auth_manager=None,
+    payload_category: str = "",
 ) -> Optional[httpx.Response]:
     """
     Send a single payload to the target agent.
@@ -166,6 +178,8 @@ async def send_payload(
         auth_headers = auth_manager.get_headers()
         auth_cookies = auth_manager.get_cookies()
 
+    await apply_scan_delay(config.scan.scan_delay)
+
     body = build_target_request_body(config, payload)
     headers = build_target_request_headers(
         config,
@@ -174,7 +188,7 @@ async def send_payload(
     )
     cookies = auth_cookies or {}
 
-    max_retries = 3
+    max_retries = 5
     retry_count = 0
 
     while retry_count < max_retries:
@@ -189,21 +203,58 @@ async def send_payload(
 
             if response.status_code == 429:
                 if config.scan.backoff_on_rate_limit:
-                    wait_time = (2 ** retry_count) * 5
-                    log.warning(
-                        "rate_limited",
-                        retry=retry_count + 1,
-                        waiting_seconds=wait_time,
+                    should_retry = await handle_rate_limit(
+                        response,
+                        attempt=retry_count,
+                        max_retries=max_retries,
                     )
-                    await asyncio.sleep(wait_time)
-                    retry_count += 1
-                    continue
+                    if should_retry:
+                        continue
                 log.warning(
                     "rate_limited_no_retry",
                     status=429,
                 )
                 return None
 
+            warn_auth_failure(response.status_code)
+
+            if (
+                response.status_code == 400
+                and config.scan.bypass_validation
+            ):
+                bypass_resp, variant = await try_validation_bypass(
+                    client,
+                    config.target.endpoint,
+                    payload,
+                    body,
+                    config.target.message_field,
+                    headers,
+                    cookies,
+                    config.scan.scan_timeout_seconds,
+                )
+                if bypass_resp is not None and variant:
+                    if payload_category:
+                        set_active_bypass(payload_category, variant)
+                    return bypass_resp
+
+            if response.status_code == 400 and payload_category:
+                active = get_active_bypass(payload_category)
+                if active:
+                    bypass_resp, _ = await try_validation_bypass(
+                        client,
+                        config.target.endpoint,
+                        payload,
+                        body,
+                        config.target.message_field,
+                        headers,
+                        cookies,
+                        config.scan.scan_timeout_seconds,
+                        variant_filter=active,
+                    )
+                    if bypass_resp is not None:
+                        return bypass_resp
+
+            _scan_response_secrets(response)
             return response
 
         except httpx.TimeoutException:
@@ -215,6 +266,7 @@ async def send_payload(
             retry_count += 1
             if retry_count < max_retries:
                 await asyncio.sleep(2 ** retry_count)
+                continue
 
         except httpx.ConnectError:
             log.error(
@@ -236,6 +288,21 @@ async def send_payload(
         endpoint=config.target.endpoint,
     )
     return None
+
+
+def _scan_response_secrets(response: httpx.Response) -> None:
+    """Log secrets detected in any HTTP response body."""
+    try:
+        body = response.text
+    except Exception:
+        return
+    for finding in scan_response_secrets(body):
+        log.warning(
+            "secret_in_response",
+            pattern=finding.pattern,
+            severity=finding.severity,
+            preview=finding.match_preview,
+        )
 
 
 async def run_payload_with_reproducibility(
@@ -315,6 +382,7 @@ async def run_payload_with_reproducibility(
                 config,
                 session_id,
                 auth_manager=auth_manager,
+                payload_category=payload_category,
             )
 
             if response is None:
