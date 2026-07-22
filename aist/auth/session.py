@@ -31,20 +31,19 @@ EMAIL_PATTERN = re.compile(
 )
 
 
-def _utc_iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
+def format_utc_iso(ts: float) -> str:
+    """Format a Unix timestamp as a timezone-aware ISO string."""
+    return (
+        datetime.fromtimestamp(ts, tz=timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
     )
 
 
-def _format_duration(seconds: int) -> str:
-    if seconds < 0:
-        return "expired"
-    hours, rem = divmod(seconds, 3600)
-    minutes = rem // 60
-    if hours:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
+def _utc_iso(ts: float) -> str:
+    """Alias for format_utc_iso (internal use)."""
+    return format_utc_iso(ts)
+
 
 
 def calculate_cookie_expiry(cookies: list) -> tuple[Optional[float], str]:
@@ -186,21 +185,37 @@ def save_auth_session(
     return data
 
 
-def _parse_expires_at(data: dict) -> Optional[float]:
-    if data.get("expires_at"):
+def _parse_expires_at(data: dict) -> Optional[datetime]:
+    """Parse expires_at from session data to a timezone-aware datetime."""
+    raw = data.get("expires_at")
+    if raw:
         try:
-            raw = data["expires_at"]
             if isinstance(raw, (int, float)):
-                return float(raw)
-            return datetime.fromisoformat(
-                str(raw).replace("Z", "+00:00")
-            ).timestamp()
+                return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+            expiry = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            return expiry
         except (TypeError, ValueError):
             pass
     legacy = data.get("expires_estimate")
     if legacy:
-        return float(legacy)
+        try:
+            return datetime.fromtimestamp(float(legacy), tz=timezone.utc)
+        except (TypeError, ValueError):
+            pass
     return None
+
+
+def _expires_at_display(data: dict) -> str:
+    """Return a human-readable expires_at string for messages."""
+    raw = data.get("expires_at")
+    if isinstance(raw, str) and raw:
+        return raw
+    expiry = _parse_expires_at(data)
+    if expiry:
+        return expiry.isoformat()
+    return "unknown"
 
 
 def check_session_expiry(
@@ -220,25 +235,76 @@ def check_session_expiry(
     if expiry_type == "session" or expires_at is None:
         return True, None, None
 
-    now = time.time()
+    now = datetime.now(timezone.utc)
     if expires_at < now:
         return (
             False,
-            f"Session expired at {_utc_iso(expires_at)}. "
+            f"Session expired at {_expires_at_display(data)}. "
             "Run with --auth-type browser to re-authenticate.",
             None,
         )
 
-    remaining = int(expires_at - now)
-    if remaining < warn_minutes * 60:
+    remaining = expires_at - now
+    if remaining.total_seconds() < warn_minutes * 60:
+        minutes = int(remaining.total_seconds() / 60)
         return (
             True,
             None,
-            f"Session expires in {_format_duration(remaining)}. "
+            f"Session expires in {minutes} minutes. "
             "This may expire during a deep scan. "
             "Consider re-authenticating first.",
         )
     return True, None, None
+
+
+def validate_session_at_scan_start(
+    filepath: str = DEFAULT_SESSION_FILE,
+    *,
+    warn_minutes: int = 30,
+) -> None:
+    """
+    Check session expiry at scan start.
+
+    Prints a warning when expiring soon; exits when expired.
+    """
+    import sys
+
+    try:
+        with open(filepath, encoding="utf-8") as handle:
+            session = json.load(handle)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        log.warning("session_load_error", error=str(exc))
+        return
+
+    expires_at = session.get("expires_at")
+    if not expires_at and session.get("expires_estimate"):
+        expires_at = _utc_iso(float(session["expires_estimate"]))
+
+    if not expires_at:
+        return
+
+    expiry = _parse_expires_at({"expires_at": expires_at})
+    if expiry is None:
+        return
+
+    now = datetime.now(timezone.utc)
+    expires_at_str = (
+        expires_at if isinstance(expires_at, str) else expiry.isoformat()
+    )
+
+    if expiry < now:
+        print(f"Session expired at {expires_at_str}")
+        print("Re-authenticate: --auth-type browser")
+        sys.exit(1)
+
+    remaining = expiry - now
+    minutes = int(remaining.total_seconds() / 60)
+
+    if minutes < warn_minutes:
+        print(f"Warning: Session expires in {minutes} minutes.")
+        print("Consider re-authenticating first.")
 
 
 def load_auth_session(

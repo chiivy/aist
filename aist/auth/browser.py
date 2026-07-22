@@ -41,6 +41,7 @@ from aist.auth.session import (
     legacy_session_to_profile,
     load_auth_session,
     save_auth_session,
+    format_utc_iso,
 )
 from aist.auth.traffic_observer import TrafficObserver
 from aist.logger import get_logger
@@ -622,11 +623,7 @@ AIST will capture your session automatically.
 
             expires_at, expiry_type = calculate_cookie_expiry(cookies)
             if expires_at:
-                from datetime import datetime, timezone
-
-                session.expires_at = datetime.fromtimestamp(
-                    expires_at, tz=timezone.utc
-                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                session.expires_at = format_utc_iso(expires_at)
                 session.expires_in_seconds = max(
                     0, int(expires_at - time.time())
                 )

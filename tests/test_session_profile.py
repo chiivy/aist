@@ -13,8 +13,10 @@ from aist.auth.session import (
     check_session_expiry,
     decode_jwt_payload,
     extract_operator_identity,
+    format_utc_iso,
     load_auth_session,
     save_auth_session,
+    validate_session_at_scan_start,
 )
 
 
@@ -48,7 +50,7 @@ def test_calculate_cookie_expiry_session_cookie() -> None:
 
 def test_check_session_expiry_expired() -> None:
     """Expired sessions return an error message."""
-    past = time.time() - 60
+    past = format_utc_iso(time.time() - 60)
     valid, error, warning = check_session_expiry(
         {"expires_at": past, "expiry_type": "expires"}
     )
@@ -59,13 +61,54 @@ def test_check_session_expiry_expired() -> None:
 
 def test_check_session_expiry_soon_warning() -> None:
     """Sessions expiring within 30 minutes warn."""
-    soon = time.time() + 600
+    soon = format_utc_iso(time.time() + 600)
     valid, error, warning = check_session_expiry(
         {"expires_at": soon, "expiry_type": "expires"}
     )
     assert valid is True
     assert error is None
     assert warning is not None
+
+
+def test_save_auth_session_expires_at_iso_string(tmp_path) -> None:
+    """expires_at is stored as a human-readable ISO string."""
+    path = str(tmp_path / "session.json")
+    cookies = [{"name": "sid", "value": "x", "maxAge": 3600}]
+    save_auth_session(cookies=cookies, auth_headers={}, filepath=path)
+
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    assert isinstance(data["expires_at"], str)
+    assert "+00:00" in data["expires_at"]
+    assert data["expires_at"].endswith("+00:00")
+
+
+def test_validate_session_at_scan_start_exits_when_expired(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Scan start validation exits when session is expired."""
+    path = str(tmp_path / "session.json")
+    expired = format_utc_iso(time.time() - 120)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(
+            {"expires_at": expired, "expiry_type": "expires"},
+            handle,
+        )
+
+    exit_code = {"value": None}
+
+    def fake_exit(code: int) -> None:
+        exit_code["value"] = code
+        raise SystemExit(code)
+
+    monkeypatch.setattr("sys.exit", fake_exit)
+
+    with pytest.raises(SystemExit):
+        validate_session_at_scan_start(path)
+
+    assert exit_code["value"] == 1
 
 
 def test_decode_jwt_payload_extracts_email() -> None:
@@ -162,7 +205,7 @@ def test_load_auth_session_raises_when_expired(tmp_path) -> None:
     )
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    data["expires_at"] = "2020-01-01T00:00:00Z"
+    data["expires_at"] = "2020-01-01T00:00:00+00:00"
     data["expiry_type"] = "expires"
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle)

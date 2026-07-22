@@ -350,6 +350,11 @@ async def run_full_scan(
     if config.auth.reuse_profile:
         auth_manager.apply_browser_session_to_target()
 
+    if config.auth.reuse_session:
+        from aist.auth.session import validate_session_at_scan_start
+
+        validate_session_at_scan_start(config.auth.session_file)
+
     auth_ok = await auth_manager.authenticate()
     if not auth_ok:
         console.print(
