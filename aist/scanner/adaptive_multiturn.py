@@ -12,7 +12,7 @@ import json
 import re
 from unittest.mock import AsyncMock, patch
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
@@ -586,7 +586,7 @@ Respond in JSON:
         )
         if self.config.llm.enabled:
             for turn in range(scenario["max_turns"]):
-                timestamp = datetime.utcnow().isoformat()
+                timestamp = datetime.now(timezone.utc).isoformat()
                 try:
                     message = await self.plan_turn(
                         scenario, conversation
@@ -685,7 +685,7 @@ Respond in JSON:
             )
 
         for turn in range(scenario["max_turns"]):
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = datetime.now(timezone.utc).isoformat()
 
             try:
                 message = await self.plan_turn(

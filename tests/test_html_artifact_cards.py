@@ -1,6 +1,6 @@
 """Smoke test: HTML report renders artifact cards without TypeError."""
 from types import SimpleNamespace
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aist.reporting.html import generate_html_report
 
@@ -34,8 +34,8 @@ def test_html_report_with_artifact_cards() -> None:
         severity_scores=[],
         confidence_scores=[],
         config=config,
-        scan_started_at=datetime.utcnow(),
-        scan_completed_at=datetime.utcnow(),
+        scan_started_at=datetime.now(timezone.utc),
+        scan_completed_at=datetime.now(timezone.utc),
     )
     assert "http://example.com" in html
     assert "artifact-card" in html

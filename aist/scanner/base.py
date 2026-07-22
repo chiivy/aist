@@ -15,7 +15,7 @@ Handles:
 import asyncio
 import random
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -374,7 +374,7 @@ async def run_payload_with_reproducibility(
                 session_id=session_id,
             )
 
-            pre_ts = datetime.utcnow().isoformat()
+            pre_ts = datetime.now(timezone.utc).isoformat()
 
             response = await send_payload(
                 client,

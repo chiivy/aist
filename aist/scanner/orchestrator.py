@@ -15,7 +15,7 @@ Phases:
 import asyncio
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -289,7 +289,7 @@ async def run_full_scan(
     Returns:
         Dictionary with scan results summary
     """
-    scan_start = datetime.utcnow()
+    scan_start = datetime.now(timezone.utc)
     siem_outputs: dict = {}
 
     scan_evidence = ScanEvidence(
@@ -1136,7 +1136,7 @@ async def run_full_scan(
             confidence_scores=confidence_scores,
             config=config,
             scan_started_at=scan_start,
-            scan_completed_at=datetime.utcnow(),
+            scan_completed_at=datetime.now(timezone.utc),
         )
         html_path = save_html_report(html, html_output)
         progress.advance(report_task)
@@ -1151,7 +1151,7 @@ async def run_full_scan(
             confidence_scores=confidence_scores,
             config=config,
             scan_started_at=scan_start,
-            scan_completed_at=datetime.utcnow(),
+            scan_completed_at=datetime.now(timezone.utc),
         )
         executive_html_path = save_html_report(
             executive_html, executive_path,
@@ -1204,7 +1204,7 @@ async def run_full_scan(
                 )
 
     scan_duration = (
-        datetime.utcnow() - scan_start
+        datetime.now(timezone.utc) - scan_start
     ).total_seconds()
 
     _print_scan_summary(

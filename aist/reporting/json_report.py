@@ -12,7 +12,7 @@ Reports are signed with a hash at generation.
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -149,7 +149,9 @@ def generate_json_report(
     report = {
         "aist_version": "1.0",
         "report_type": "full_scan",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        ),
         "target": scan_evidence.target,
         "contains_sensitive_values": expose,
         "summary": summary,

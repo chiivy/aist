@@ -15,7 +15,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional
@@ -173,7 +173,7 @@ class Scheduler:
                     schedule_name,
                     result.get("target", ""),
                     profile,
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                     result.get("critical", 0),
                     result.get("high", 0),
                     result.get("medium", 0),
@@ -384,7 +384,7 @@ class Scheduler:
             name=schedule["name"],
         )
         config = self.build_config(schedule)
-        timestamp = datetime.utcnow().strftime(
+        timestamp = datetime.now(timezone.utc).strftime(
             "%Y-%m-%d-%H-%M"
         )
         safe_target = schedule["target"].replace(

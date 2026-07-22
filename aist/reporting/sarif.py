@@ -15,7 +15,7 @@ their workflow.
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aist.logger import get_logger
@@ -98,7 +98,9 @@ def generate_sarif_report(
                 "properties": {
                     "target": scan_evidence.target,
                     "scanDate": (
-                        datetime.utcnow().isoformat() + "Z"
+                        datetime.now(timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z")
                     ),
                     "totalPayloads": (
                         scan_evidence.total_payloads_sent
