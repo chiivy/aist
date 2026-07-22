@@ -146,6 +146,171 @@ def path_from_url(url: str) -> str:
     return parsed.path or "/"
 
 
+def _mask_secret_preview(value: str) -> str:
+    """Redact sensitive preview text for discovery evidence."""
+    text = (value or "").strip()
+    if len(text) <= 8:
+        return "****"
+    return f"{text[:4]}****{text[-4:]}"
+
+
+def make_discovery_finding(
+    finding_type: str,
+    title: str,
+    detail: str,
+    severity: str,
+    evidence: str = "",
+) -> dict[str, Any]:
+    """
+    Build one discovery finding.
+
+    Schema is fixed to five fields; ``type`` values
+    are open-ended so new discovery kinds need no
+    report-code changes.
+    """
+    return {
+        "type": finding_type,
+        "title": title,
+        "detail": detail,
+        "severity": (severity or "low").lower(),
+        "evidence": evidence or "",
+    }
+
+
+def build_discovery_block(
+    *,
+    discovered_endpoints: Optional[list] = None,
+    endpoint_labels: Optional[dict] = None,
+    js_files_scanned: int = 0,
+    js_secrets: Optional[list] = None,
+    js_extra_endpoints: Optional[list] = None,
+    websocket_detected: bool = False,
+    extra_findings: Optional[list] = None,
+) -> dict[str, Any]:
+    """
+    Assemble a flexible discovery block for the profile.
+
+    Findings are built from HTTP/JS observation only --
+    no LLM classification.
+    """
+    findings: list[dict[str, Any]] = []
+    endpoints = list(discovered_endpoints or [])
+    labels = endpoint_labels or {}
+
+    for path, meta in labels.items():
+        if isinstance(meta, dict):
+            severity = meta.get("severity", "medium")
+            label = meta.get("label", "Sensitive endpoint exposed")
+        elif isinstance(meta, (list, tuple)) and len(meta) >= 2:
+            severity, label = meta[0], meta[1]
+        else:
+            severity, label = "medium", "Sensitive endpoint exposed"
+        findings.append(
+            make_discovery_finding(
+                "endpoint_discovered",
+                label,
+                str(path),
+                severity,
+                evidence=f"Endpoint observed during browser session: {path}",
+            )
+        )
+
+    for secret in js_secrets or []:
+        preview = str(secret)
+        # "Label: value" from scan_js_content
+        if ": " in preview:
+            label, raw = preview.split(": ", 1)
+            evidence = f"{label}: {_mask_secret_preview(raw)}"
+            title = f"Secret found in JavaScript ({label})"
+            detail = f"Possible {label.lower()} in downloaded JavaScript"
+        else:
+            evidence = _mask_secret_preview(preview)
+            title = "Secret found in JavaScript file"
+            detail = "Sensitive pattern matched in JavaScript content"
+        findings.append(
+            make_discovery_finding(
+                "js_secret",
+                title,
+                detail,
+                "high",
+                evidence=evidence,
+            )
+        )
+
+    for endpoint in js_extra_endpoints or []:
+        path = str(endpoint)
+        if ": " in path:
+            path = path.split(": ", 1)[-1]
+        findings.append(
+            make_discovery_finding(
+                "js_endpoint",
+                "API endpoint referenced in JavaScript",
+                path,
+                "low",
+                evidence=f"Found in JS source: {path}",
+            )
+        )
+
+    if websocket_detected:
+        findings.append(
+            make_discovery_finding(
+                "websocket_detected",
+                "WebSocket transport detected",
+                "Application appears to use WebSocket for chat traffic",
+                "medium",
+                evidence="Upgrade/WebSocket signal during session capture",
+            )
+        )
+
+    for item in extra_findings or []:
+        if not isinstance(item, dict):
+            continue
+        findings.append(
+            make_discovery_finding(
+                str(item.get("type", "discovery")),
+                str(item.get("title", "Discovery finding")),
+                str(item.get("detail", "")),
+                str(item.get("severity", "low")),
+                evidence=str(item.get("evidence", "")),
+            )
+        )
+
+    return {
+        "findings": findings,
+        "stats": {
+            "total_endpoints": len(endpoints),
+            "js_files_scanned": int(js_files_scanned or 0),
+            "findings_count": len(findings),
+        },
+    }
+
+
+def merge_discovery_findings(
+    discovery: dict[str, Any],
+    new_findings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Append findings into an existing discovery block."""
+    block = dict(discovery or {})
+    findings = list(block.get("findings") or [])
+    for item in new_findings:
+        findings.append(
+            make_discovery_finding(
+                str(item.get("type", "discovery")),
+                str(item.get("title", "Discovery finding")),
+                str(item.get("detail", "")),
+                str(item.get("severity", "low")),
+                evidence=str(item.get("evidence", "")),
+            )
+        )
+    stats = dict(block.get("stats") or {})
+    stats["findings_count"] = len(findings)
+    stats.setdefault("total_endpoints", 0)
+    stats.setdefault("js_files_scanned", 0)
+    block["findings"] = findings
+    block["stats"] = stats
+    return block
+
+
 def save_request_profile(
     profile: dict[str, Any],
     filepath: str = DEFAULT_PROFILE_FILE,

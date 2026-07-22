@@ -208,6 +208,13 @@ def generate_json_report(
         "report_hash": "PLACEHOLDER",
     }
 
+    discovery = getattr(scan_evidence, "discovery", None) or {}
+    if discovery.get("findings"):
+        report["discovery"] = {
+            "findings": discovery.get("findings", []),
+            "stats": discovery.get("stats", {}),
+        }
+
     report_str = json.dumps(report, sort_keys=True)
     report_hash = hashlib.sha256(
         report_str.encode("utf-8")

@@ -804,6 +804,20 @@ def main():
     help="When 400 received, attempt encoding bypass variants.",
 )
 @click.option(
+    "--multi-endpoint",
+    is_flag=True,
+    default=False,
+    help="Scan all detected AI agent endpoints, "
+         "not just the highest-confidence one.",
+)
+@click.option(
+    "--skip-endpoint-detection",
+    is_flag=True,
+    default=False,
+    help="Skip AI endpoint probing. Use --target "
+         "directly without classifying discovered paths.",
+)
+@click.option(
     "--local-judge",
     is_flag=True,
     default=False,
@@ -875,7 +889,8 @@ def scan(
     response_field, no_followup, app_context,
     reuse_session, session_file, capture_profile, reuse_profile,
     profile_file, response_type, scan_delay, test_endpoints,
-    bypass_validation, local_judge,
+    bypass_validation, multi_endpoint, skip_endpoint_detection,
+    local_judge,
     profile, fail_on, no_adaptive_recon, no_multiturn,
     notify_slack, notify_email, redacted,
 ):
@@ -1065,6 +1080,8 @@ def scan(
         config.scan.scan_delay = scan_delay
 
     config.scan.bypass_validation = bypass_validation
+    config.scan.multi_endpoint = multi_endpoint
+    config.scan.skip_endpoint_detection = skip_endpoint_detection
 
     if auth_cookie_value:
         config.auth.cookie_name = auth_cookie_name or "session"

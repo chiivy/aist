@@ -17,6 +17,7 @@ from aist.auth.profile import (
     extract_custom_headers,
     path_from_url,
     scan_js_content,
+    build_discovery_block,
 )
 from aist.logger import get_logger
 
@@ -168,6 +169,18 @@ class TrafficObserver:
             primary_path = path_from_url(primary_endpoint)
             if primary_path not in endpoints:
                 endpoints.insert(0, primary_path)
+        endpoint_labels = {
+            path: {"severity": sev, "label": label}
+            for path, (sev, label) in self.data.endpoint_labels.items()
+        }
+        discovery = build_discovery_block(
+            discovered_endpoints=endpoints,
+            endpoint_labels=endpoint_labels,
+            js_files_scanned=self.data.js_files_scanned,
+            js_secrets=self.data.js_secrets,
+            js_extra_endpoints=self.data.js_endpoints[:20],
+            websocket_detected=self.data.websocket_detected,
+        )
         return {
             "primary_endpoint": primary_endpoint,
             "message_field": self.data.message_field,
@@ -181,8 +194,6 @@ class TrafficObserver:
             "js_files_scanned": self.data.js_files_scanned,
             "js_secrets_found": len(self.data.js_secrets),
             "js_extra_endpoints": self.data.js_endpoints[:20],
-            "endpoint_labels": {
-                path: {"severity": sev, "label": label}
-                for path, (sev, label) in self.data.endpoint_labels.items()
-            },
+            "endpoint_labels": endpoint_labels,
+            "discovery": discovery,
         }

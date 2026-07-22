@@ -94,6 +94,8 @@ class ScanConfig:
     )
     scan_delay: float = 1.0
     bypass_validation: bool = False
+    multi_endpoint: bool = False
+    skip_endpoint_detection: bool = False
 
 
 @dataclass

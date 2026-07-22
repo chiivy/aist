@@ -608,6 +608,14 @@ def generate_executive_html_report(
         if infra_count else None
     )
 
+    from aist.reporting.executive import (
+        discovery_executive_paragraph,
+    )
+
+    discovery_note = discovery_executive_paragraph(
+        getattr(scan_evidence, "discovery", None)
+    )
+
     env = Environment(loader=BaseLoader())
     template = env.from_string(EXECUTIVE_HTML_TEMPLATE)
     return template.render(
@@ -632,6 +640,7 @@ def generate_executive_html_report(
         soc2_criteria=compliance.get("soc2_criteria", []),
         recommendations=recommendations,
         infrastructure_note=infrastructure_note,
+        discovery_note=discovery_note,
         aist_version="1.0",
     )
 
@@ -783,6 +792,11 @@ EXECUTIVE_HTML_TEMPLATE = """<!DOCTYPE html>
   {% if artifacts_sentence %}
   <div class="summary-sentence" style="margin-top:0.5rem;">
     {{ artifacts_sentence }}
+  </div>
+  {% endif %}
+  {% if discovery_note %}
+  <div class="summary-sentence" style="margin-top:0.5rem;">
+    {{ discovery_note }}
   </div>
   {% endif %}
 </div>
@@ -1608,7 +1622,30 @@ def _render_template(
         operator_identity=_format_operator_identity(
             scan_evidence, config
         ),
+        browser_discovery=_build_browser_discovery(
+            scan_evidence
+        ),
     )
+
+
+def _build_browser_discovery(scan_evidence) -> dict:
+    """Normalise passive browser discovery for HTML rendering."""
+    discovery = getattr(scan_evidence, "discovery", None) or {}
+    findings = discovery.get("findings") or []
+    if not findings:
+        return {}
+    stats = discovery.get("stats") or {}
+    return {
+        "findings": findings,
+        "stats": {
+            "total_endpoints": stats.get("total_endpoints", 0),
+            "js_files_scanned": stats.get("js_files_scanned", 0),
+            "findings_count": stats.get(
+                "findings_count",
+                len(findings),
+            ),
+        },
+    }
 
 
 def _format_operator_identity(scan_evidence, config) -> dict:
@@ -3251,6 +3288,50 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </p>
   </div>
   {% endfor %}
+  {% endif %}
+
+  <!-- Discovery Findings (browser session) -->
+  {% if browser_discovery and browser_discovery.findings %}
+  <div class="section-title">Discovery Findings</div>
+  <p style="color:#94a3b8; margin:0 0 1rem 0; font-size:0.95rem;">
+    Identified passively during browser session analysis.
+    No active probing was required for these findings.
+  </p>
+  <p style="color:#64748b; margin:0 0 1.25rem 0; font-size:0.9rem;">
+    {{ browser_discovery.stats.findings_count }} findings
+    &nbsp;|&nbsp;
+    {{ browser_discovery.stats.total_endpoints }} endpoints observed
+    &nbsp;|&nbsp;
+    {{ browser_discovery.stats.js_files_scanned }} JS files scanned
+  </p>
+  <div class="findings-section">
+    {% for finding in browser_discovery.findings %}
+    <div class="finding-card {{ finding.severity | lower }}">
+      <div class="finding-header">
+        <div class="finding-title">
+          <span class="severity-badge badge-{{ finding.severity | lower }}">
+            {{ finding.severity | title }}
+          </span>
+          <span class="finding-id">{{ finding.type }}</span>
+          <span style="color:#e2e8f0; font-size:0.9rem;">
+            {{ finding.title }}
+          </span>
+        </div>
+      </div>
+      <div class="finding-body" style="display:block;">
+        <div class="finding-divider"></div>
+        <div class="finding-section-label">Detail</div>
+        <div style="color:#cbd5e1; margin-bottom:0.75rem;">
+          {{ finding.detail }}
+        </div>
+        {% if finding.evidence %}
+        <div class="finding-section-label">Evidence</div>
+        <pre style="white-space:pre-wrap; color:#94a3b8;">{{ finding.evidence }}</pre>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
   {% endif %}
 
   <!-- Findings -->

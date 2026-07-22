@@ -140,6 +140,7 @@ async def _run_endpoint_auth_tests(
         getattr(scan_evidence, "infrastructure_findings", [])
         or []
     )
+    discovery_extras: list[dict] = []
     for item in findings:
         infra_findings.append(
             InfraFinding(
@@ -155,12 +156,196 @@ async def _run_endpoint_auth_tests(
                 payload_id="ENDPOINT",
             )
         )
+        discovery_extras.append({
+            "type": "endpoint_auth_issue",
+            "title": item.description.split(".")[0]
+            if item.description
+            else f"Auth issue on {item.endpoint}",
+            "detail": item.description,
+            "severity": item.severity,
+            "evidence": item.evidence,
+        })
     scan_evidence.infrastructure_findings = infra_findings
+    if discovery_extras:
+        from aist.auth.profile import merge_discovery_findings
+
+        scan_evidence.discovery = merge_discovery_findings(
+            getattr(scan_evidence, "discovery", {}) or {},
+            discovery_extras,
+        )
     if findings:
         console.print(
             f"[yellow]Endpoint auth tests: "
             f"{len(findings)} issue(s) found[/yellow]"
         )
+
+
+def _collect_endpoints_for_classification(
+    config: AISTConfig,
+    auth_manager: AuthManager,
+) -> list[str]:
+    """Gather discovered paths and primary URL for classification."""
+    from aist.auth.profile import load_request_profile
+
+    endpoints: list[str] = []
+    profile = load_request_profile(config.auth.profile_file) or {}
+    endpoints.extend(profile.get("discovered_endpoints") or [])
+
+    if profile.get("primary_endpoint"):
+        endpoints.append(profile["primary_endpoint"])
+
+    browser_session = auth_manager.get_browser_session()
+    if browser_session:
+        if browser_session.chat_endpoint:
+            endpoints.append(browser_session.chat_endpoint)
+        if browser_session.request_profile:
+            endpoints.extend(
+                browser_session.request_profile.get(
+                    "discovered_endpoints",
+                    [],
+                )
+            )
+
+    if config.target.endpoint:
+        endpoints.append(config.target.endpoint)
+
+    # Preserve order, drop empties/dupes
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in endpoints:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+def _print_endpoint_classification_summary(
+    classification: dict,
+) -> None:
+    """Print AI agent detection summary for the operator."""
+    agents = classification.get("ai_agents") or []
+    apis = classification.get("apis") or []
+    excluded = classification.get("excluded") or []
+    errors = classification.get("errors") or []
+
+    console.print(
+        "\n[bold]AI Agent Detection complete:[/bold]"
+    )
+    console.print(f"  AI agents found: {len(agents)}")
+    for agent in agents[:12]:
+        conf = agent.get("confidence", 0)
+        label = agent.get("endpoint") or agent.get("url", "")
+        console.print(
+            f"    {label} (confidence: {conf}%)"
+        )
+    if len(agents) > 12:
+        console.print(
+            f"    ... and {len(agents) - 12} more"
+        )
+    console.print(f"  Regular APIs: {len(apis)}")
+    console.print(
+        f"  Excluded (third party): {len(excluded)}"
+    )
+    console.print(f"  Errors: {len(errors)}\n")
+
+
+async def _run_ai_endpoint_detection(
+    config: AISTConfig,
+    auth_manager: AuthManager,
+    scan_evidence: ScanEvidence,
+) -> list[dict]:
+    """
+    Classify discovered endpoints and select AI scan targets.
+
+    Returns the list of AI agent endpoints to scan.
+    """
+    from aist.scanner.endpoint_classifier import (
+        EndpointClassifier,
+        apply_classified_endpoint_to_target,
+        select_ai_targets,
+    )
+
+    if config.scan.skip_endpoint_detection:
+        console.print(
+            "[dim]AI endpoint detection skipped "
+            "(--skip-endpoint-detection).[/dim]\n"
+        )
+        return []
+
+    endpoints = _collect_endpoints_for_classification(
+        config,
+        auth_manager,
+    )
+    if not endpoints:
+        log.info(
+            "endpoint_classification_skipped",
+            reason="no_endpoints",
+        )
+        return []
+
+    console.print(
+        f"[dim]Classifying {len(endpoints)} discovered "
+        "endpoints for AI agents...[/dim]"
+    )
+
+    base_url = config.target.endpoint or ""
+    classifier = EndpointClassifier()
+    classification = await classifier.classify_endpoints(
+        endpoints=endpoints,
+        base_url=base_url,
+        auth_headers=auth_manager.get_headers(),
+        cookies=auth_manager.get_cookies(),
+        scan_delay=config.scan.scan_delay,
+        message_field=config.target.message_field or "message",
+    )
+
+    scan_evidence.endpoint_classification = {
+        key: [
+            {
+                "endpoint": item.get("endpoint"),
+                "url": item.get("url"),
+                "confidence": item.get("confidence"),
+                "evidence": item.get("evidence"),
+            }
+            for item in values
+        ]
+        for key, values in classification.items()
+    }
+    _print_endpoint_classification_summary(classification)
+
+    targets = select_ai_targets(
+        classification,
+        multi_endpoint=config.scan.multi_endpoint,
+    )
+    scan_evidence.ai_agent_endpoints = targets
+
+    if not targets:
+        console.print(
+            "[yellow]No AI agent endpoints detected. "
+            "Continuing with the configured target "
+            "endpoint.[/yellow]\n"
+        )
+        return []
+
+    primary = targets[0]
+    apply_classified_endpoint_to_target(config.target, primary)
+    scan_evidence.target = config.target.endpoint
+    console.print(
+        f"[green]✓ Primary AI endpoint:[/green] "
+        f"{config.target.endpoint} "
+        f"(confidence: {primary.get('confidence', 0)}%)"
+    )
+    if config.scan.multi_endpoint and len(targets) > 1:
+        console.print(
+            f"[cyan]Multi-endpoint mode:[/cyan] "
+            f"will also scan {len(targets) - 1} "
+            "additional AI agent(s).\n"
+        )
+    else:
+        console.print()
+
+    return targets
 
 
 def build_scanner_tasks(config: AISTConfig) -> list[tuple[str, str]]:
@@ -411,6 +596,40 @@ async def run_full_scan(
         except ValueError:
             pass
 
+    # Load passive browser discovery findings into the report
+    from aist.auth.profile import (
+        build_discovery_block,
+        load_request_profile,
+    )
+
+    profile = load_request_profile(config.auth.profile_file) or {}
+    if browser_session and getattr(
+        browser_session, "request_profile", None
+    ):
+        profile = {
+            **profile,
+            **(browser_session.request_profile or {}),
+        }
+    if profile.get("discovery"):
+        scan_evidence.discovery = profile["discovery"]
+    elif (
+        profile.get("discovered_endpoints")
+        or profile.get("endpoint_labels")
+        or profile.get("js_secrets_found")
+    ):
+        # Rebuild from older profiles that lack discovery block
+        scan_evidence.discovery = build_discovery_block(
+            discovered_endpoints=profile.get(
+                "discovered_endpoints", []
+            ),
+            endpoint_labels=profile.get("endpoint_labels", {}),
+            js_files_scanned=profile.get("js_files_scanned", 0),
+            js_secrets=[],
+            js_extra_endpoints=profile.get(
+                "js_extra_endpoints", []
+            ),
+        )
+
     if (
         config.auth.test_endpoints
         and not config.scan.safe_mode
@@ -421,6 +640,12 @@ async def run_full_scan(
             auth_manager,
             scan_evidence,
         )
+
+    ai_targets = await _run_ai_endpoint_detection(
+        config,
+        auth_manager,
+        scan_evidence,
+    )
 
     with Progress(
         SpinnerColumn(),
@@ -830,6 +1055,61 @@ async def run_full_scan(
                     all_run_results.update(results)
 
             progress.advance(scan_task)
+
+        # Additional AI agent endpoints (--multi-endpoint)
+        if (
+            config.scan.multi_endpoint
+            and len(ai_targets) > 1
+            and should_run_direct_scanner(categories)
+        ):
+            from aist.scanner.endpoint_classifier import (
+                apply_classified_endpoint_to_target,
+            )
+
+            primary_endpoint = config.target.endpoint
+            for extra in ai_targets[1:]:
+                console.print(
+                    f"[cyan]Scanning additional AI endpoint:[/cyan] "
+                    f"{extra.get('url')}"
+                )
+                apply_classified_endpoint_to_target(
+                    config.target,
+                    extra,
+                )
+                run_cats = filter_direct_categories(
+                    categories,
+                    safe_mode=config.scan.safe_mode,
+                )
+                if not run_cats:
+                    continue
+                evidence, results = await run_direct_scanner(
+                    config,
+                    canary_token,
+                    run_cats,
+                    auth_manager=auth_manager,
+                    side_effects_monitor=side_effects_monitor,
+                )
+                # Tag findings so reports show which endpoint
+                for item in evidence:
+                    endpoint_tag = extra.get("endpoint") or ""
+                    item.payload_id = (
+                        f"{item.payload_id}@{endpoint_tag}"
+                    )
+                    setattr(
+                        item,
+                        "scanned_endpoint",
+                        extra.get("url"),
+                    )
+                tagged_results = {
+                    f"{key}@{extra.get('endpoint', '')}": value
+                    for key, value in results.items()
+                }
+                all_evidence.extend(evidence)
+                all_run_results.update(tagged_results)
+
+            # Restore primary endpoint for reporting
+            config.target.endpoint = primary_endpoint
+            scan_evidence.target = primary_endpoint
 
         # Phase 2: Adaptive multi-turn scenarios
         if config.scan.multiturn_enabled and not (

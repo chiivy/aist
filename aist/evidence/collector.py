@@ -126,6 +126,9 @@ class ScanEvidence:
     operator_identity: dict = field(default_factory=dict)
     validation_blocked_count: int = 0
     validation_blocked_categories: list = field(default_factory=list)
+    endpoint_classification: dict = field(default_factory=dict)
+    ai_agent_endpoints: list = field(default_factory=list)
+    discovery: dict = field(default_factory=dict)
 
 
 def is_genuine_finding(evidence: Evidence) -> bool:
