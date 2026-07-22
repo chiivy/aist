@@ -90,6 +90,18 @@ _AUTH_RESPONSE_PATTERNS = (
     "authentication_token",
 )
 
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+_STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {
+  get: () => undefined
+});
+"""
+
 
 @dataclass
 class BrowserSession:
@@ -491,14 +503,19 @@ AIST will capture your session automatically.
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
             headless=headless,
-            args=["--no-sandbox"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
         )
 
         context = await browser.new_context(
-            viewport={"width": 1280, "height": 800},
+            user_agent=_BROWSER_USER_AGENT,
+            viewport={"width": 1920, "height": 1080},
         )
 
         page = await context.new_page()
+        await page.add_init_script(_STEALTH_INIT_SCRIPT)
 
         async def handle_response(response) -> None:
             request = response.request
