@@ -511,7 +511,7 @@ AIST will capture your session automatically.
 
         context = await browser.new_context(
             user_agent=_BROWSER_USER_AGENT,
-            viewport={"width": 1920, "height": 1080},
+            viewport={"width": 1280, "height": 800},
         )
 
         page = await context.new_page()
