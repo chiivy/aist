@@ -1,8 +1,13 @@
 """Tests for browser auth helpers and redacted report sanitisation."""
 
 from aist.auth.browser import (
+    CHAT_INPUT_SELECTORS,
     _is_auth_response,
     _is_auth_url,
+    _looks_like_chat_post_body,
+    _rank_chat_candidates,
+    _score_chat_candidate,
+    _should_capture_chat_post,
     load_session,
     save_session,
     BrowserSession,
@@ -37,6 +42,54 @@ def test_sanitise_for_sharing_redacts_email() -> None:
     assert "user@example.com" not in result
     assert "[EMAIL REDACTED]" in result
     assert "REDACTED VERSION" in result
+
+
+def test_looks_like_chat_post_body() -> None:
+    """Message-like JSON bodies are recognised."""
+    assert _looks_like_chat_post_body({"query": "hello there"})
+    assert not _should_capture_chat_post(
+        "https://app.example.com/telemetry",
+        {"event": "click"},
+    )
+
+
+def test_should_capture_chat_post_by_url_or_body() -> None:
+    """Chat POSTs match URL keywords or message-shaped bodies."""
+    assert _should_capture_chat_post(
+        "https://app.example.com/api/completion",
+        {},
+    )
+    assert _should_capture_chat_post(
+        "https://app.example.com/v1/run",
+        {"prompt": "What can you help with?"},
+    )
+
+
+def test_rank_chat_candidates_prefers_message_posts() -> None:
+    """Highest-scored candidate should look most like chat."""
+    candidates = [
+        {
+            "url": "https://app.example.com/telemetry",
+            "body": {"event": "click"},
+            "response_preview": "ok",
+        },
+        {
+            "url": "https://app.example.com/api/chat",
+            "body": {"query": "What is the fuel level?"},
+            "response_preview": '{"answer": "Tank is at 80%"}',
+        },
+    ]
+    ranked = _rank_chat_candidates(candidates)
+    assert ranked[0]["url"].endswith("/api/chat")
+    assert _score_chat_candidate(ranked[0]) > _score_chat_candidate(
+        candidates[0]
+    )
+
+
+def test_chat_input_selectors_defined() -> None:
+    """Common chat input selectors are configured."""
+    assert len(CHAT_INPUT_SELECTORS) >= 10
+
 
 def test_session_save_and_load(tmp_path) -> None:
     """Saved sessions can be loaded before expiry."""

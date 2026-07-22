@@ -22,7 +22,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -102,6 +102,57 @@ Object.defineProperty(navigator, 'webdriver', {
 });
 """
 
+CHAT_INPUT_SELECTORS = [
+    "textarea[placeholder*='message' i]",
+    "textarea[placeholder*='chat' i]",
+    "textarea[placeholder*='ask' i]",
+    "textarea[placeholder*='type' i]",
+    "input[placeholder*='message' i]",
+    "input[placeholder*='chat' i]",
+    "input[placeholder*='ask' i]",
+    "input[type='text'][placeholder*='message' i]",
+    "[data-testid*='chat']",
+    "[data-testid*='message']",
+    "[aria-label*='chat' i]",
+    "[aria-label*='message' i]",
+    "[class*='chat-input']",
+    "[class*='message-input']",
+    "[class*='chatbar']",
+    "[id*='chat-input']",
+    "[id*='message-input']",
+    "[contenteditable='true']",
+]
+
+CHAT_BUTTON_SELECTORS = [
+    "button[aria-label*='chat' i]",
+    "button[aria-label*='assistant' i]",
+    "button[title*='chat' i]",
+    "button[title*='assistant' i]",
+    "[class*='chat-toggle']",
+    "[class*='chat-button']",
+    "[class*='ai-button']",
+    "[data-testid*='chat-button']",
+    "button:has-text('Chat')",
+    "button:has-text('Assistant')",
+    "button:has-text('Ask')",
+]
+
+_CHAT_URL_KEYWORDS_EXTENDED = _CHAT_URL_KEYWORDS + (
+    "completion",
+    "converse",
+    "prompt",
+    "generate",
+    "inference",
+    "llm",
+    "agent",
+    "copilot",
+    "assistant",
+    "conversation",
+    "send",
+)
+
+_AUTO_TEST_MESSAGE = "What can you help me with today?"
+
 
 @dataclass
 class BrowserSession:
@@ -165,6 +216,229 @@ def _is_auth_response(
         pass
 
     return False
+
+
+def _looks_like_chat_post_body(body: dict) -> bool:
+    """Return True if JSON body resembles a chat message request."""
+    for key, value in body.items():
+        if isinstance(value, str):
+            key_lower = str(key).lower()
+            if (
+                key_lower in _MESSAGE_FIELD_CANDIDATES
+                and len(value.strip()) > 3
+            ):
+                return True
+            if len(value.strip()) > 20:
+                return True
+        if isinstance(value, dict):
+            if _looks_like_chat_post_body(value):
+                return True
+    return False
+
+
+def _should_capture_chat_post(url: str, body: dict) -> bool:
+    """Decide whether a POST request is likely a chat API call."""
+    lower = url.lower()
+    if any(keyword in lower for keyword in _CHAT_URL_KEYWORDS_EXTENDED):
+        return True
+    return _looks_like_chat_post_body(body)
+
+
+async def _wait_for_app_ready(page) -> None:
+    """Wait for SPA shell and network activity to settle after login."""
+    try:
+        await page.wait_for_load_state("networkidle", timeout=30000)
+    except Exception as exc:
+        log.info(
+            "networkidle_timeout",
+            message="Continuing after networkidle wait",
+            error=str(exc),
+        )
+    await page.wait_for_timeout(3000)
+
+
+async def _wait_for_login(page, console) -> None:
+    """
+    Prompt operator to use the app while AIST records traffic.
+
+    Matches the traffic-first model used by other scanners:
+    only a URL is required; the operator's real interactions
+    reveal the chat API endpoint.
+    """
+    del page
+    console.print(
+        "\n[bold]Use the app normally while AIST watches traffic:[/bold]"
+        "\n  1. Log in"
+        "\n  2. Navigate to the AI chat"
+        "\n  3. Send at least one message or query"
+        "\n  4. Return here and press Enter when done"
+        "\n\n[dim]POST requests appear below as they are captured.[/dim]\n"
+    )
+    await asyncio.to_thread(
+        input,
+        "Press Enter when done...",
+    )
+
+
+def _score_chat_candidate(candidate: dict) -> int:
+    """Score how likely a captured POST is the chat API."""
+    score = 0
+    url = candidate.get("url", "").lower()
+    body = candidate.get("body") or {}
+    preview = (candidate.get("response_preview") or "").lower()
+
+    for keyword in _CHAT_URL_KEYWORDS_EXTENDED:
+        if keyword in url:
+            score += 10
+
+    if _looks_like_chat_post_body(body):
+        score += 30
+
+    chat_response_signals = (
+        "response",
+        "answer",
+        "content",
+        "assistant",
+        "data:",
+        "message",
+        "completion",
+    )
+    if any(signal in preview for signal in chat_response_signals):
+        score += 25
+
+    if _is_auth_response(preview, body if isinstance(body, dict) else None):
+        score -= 100
+
+    return score
+
+
+def _rank_chat_candidates(captured_requests: list) -> list[dict]:
+    """Return captured POSTs ranked by chat-likelihood."""
+    ranked = sorted(
+        captured_requests,
+        key=_score_chat_candidate,
+        reverse=True,
+    )
+    return [c for c in ranked if _score_chat_candidate(c) > 0]
+
+
+async def _find_chat_input_in_frames(
+    page,
+    console,
+) -> tuple[Any, Optional[str]]:
+    """Search main page and all iframes for a chat input."""
+    targets: list[Any] = [page]
+    targets.extend(
+        frame for frame in page.frames if frame != page.main_frame
+    )
+
+    for target in targets:
+        frame_label = (
+            "main page"
+            if target == page
+            else getattr(target, "url", "iframe")
+        )
+        for selector in CHAT_INPUT_SELECTORS:
+            try:
+                if target == page:
+                    element = await page.wait_for_selector(
+                        selector,
+                        timeout=1000,
+                        state="visible",
+                    )
+                else:
+                    element = await target.wait_for_selector(
+                        selector,
+                        timeout=1000,
+                        state="visible",
+                    )
+                if element:
+                    console.print(
+                        f"[green]Chat input found[/green] "
+                        f"({frame_label}): {selector}"
+                    )
+                    log.info(
+                        "chat_input_found",
+                        selector=selector,
+                        frame=frame_label,
+                    )
+                    return element, selector
+            except Exception:
+                continue
+    return None, None
+
+
+async def _find_chat_input(page, console) -> tuple[Any, Optional[str]]:
+    """Try common selectors to locate a chat input element."""
+    return await _find_chat_input_in_frames(page, console)
+
+
+async def _open_chat_panel(page, console) -> tuple[Any, Optional[str]]:
+    """Click a chat toggle button and re-scan for inputs."""
+    for selector in CHAT_BUTTON_SELECTORS:
+        try:
+            if ":has-text(" in selector:
+                button = page.locator(selector).first
+                await button.wait_for(timeout=2000, state="visible")
+            else:
+                button = await page.wait_for_selector(
+                    selector,
+                    timeout=2000,
+                    state="visible",
+                )
+            if button:
+                console.print(
+                    f"[green]Chat button found:[/green] {selector}"
+                )
+                log.info("chat_button_found", selector=selector)
+                await button.click()
+                await page.wait_for_timeout(2000)
+                return await _find_chat_input(page, console)
+        except Exception:
+            continue
+    return None, None
+
+
+async def _send_auto_test_message(page, chat_input, console) -> None:
+    """Send a test message through a discovered chat input."""
+    try:
+        await chat_input.click()
+        is_editable = await chat_input.evaluate(
+            "el => el.isContentEditable"
+        )
+        if is_editable:
+            await chat_input.type(_AUTO_TEST_MESSAGE, delay=20)
+        else:
+            await chat_input.fill(_AUTO_TEST_MESSAGE)
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(3000)
+        console.print(
+            "[green]Test message sent automatically.[/green]"
+        )
+        log.info("auto_test_message_sent")
+    except Exception as exc:
+        log.warning(
+            "auto_test_message_failed",
+            error=str(exc),
+        )
+        console.print(
+            "[yellow]Could not auto-send test message. "
+            "Please send one manually in the browser.[/yellow]"
+        )
+
+
+async def _discover_chat_interface(page, console) -> tuple[Any, Optional[str]]:
+    """
+    Wait for app load and attempt to locate the chat UI.
+
+    Returns (element, selector) or (None, None).
+    """
+    await _wait_for_app_ready(page)
+    chat_input, selector = await _find_chat_input(page, console)
+    if chat_input:
+        return chat_input, selector
+    chat_input, selector = await _open_chat_panel(page, console)
+    return chat_input, selector
 
 
 def _cookies_to_dict(cookies: list) -> dict[str, str]:
@@ -410,8 +684,10 @@ async def _select_verified_endpoint(
     import click
 
     cookie_dict = _cookies_to_dict(cookies)
+    ranked = _rank_chat_candidates(captured_requests)
+    candidates = ranked or list(reversed(captured_requests))
 
-    for candidate in reversed(captured_requests):
+    for candidate in candidates:
         message_field = _detect_message_field(candidate["body"])
         is_valid, preview = await verify_chat_endpoint(
             url=candidate["url"],
@@ -425,6 +701,7 @@ async def _select_verified_endpoint(
             log.info(
                 "chat_endpoint_verified",
                 url=candidate["url"],
+                score=_score_chat_candidate(candidate),
             )
             return candidate
 
@@ -486,14 +763,11 @@ async def capture_browser_session(
     console.print("""
 [bold cyan]Browser Authentication[/bold cyan]
 
-AIST will open a browser window.
-Please:
-  1. Log in to the application normally
-  2. Navigate to the AI chat interface
-  3. Send ONE test message to the agent
-  4. Return here and press Enter
-
-AIST will capture your session automatically.
+AIST will open a browser and record all traffic
+while you use the application normally.
+Only the URL is required — navigate, log in,
+and send a chat message; AIST finds the API
+from your live interactions.
 """)
 
     session = BrowserSession(base_url=target_url)
@@ -529,12 +803,7 @@ AIST will capture your session automatically.
             if _is_auth_url(url):
                 return
 
-            if not any(
-                keyword in url.lower()
-                for keyword in _CHAT_URL_KEYWORDS
-            ):
-                return
-
+            body_json: dict = {}
             try:
                 post_data = request.post_data
                 if not post_data:
@@ -551,39 +820,69 @@ AIST will capture your session automatically.
                 response_text = ""
 
             if _is_auth_response(response_text, body_json):
-                log.info(
-                    "auth_response_skipped",
-                    url=url,
-                )
+                log.info("auth_response_skipped", url=url)
                 return
 
-            captured_requests.append({
+            candidate = {
                 "url": url,
                 "headers": dict(request.headers),
                 "body": body_json,
-                "response_preview": response_text[:200],
-            })
+                "response_preview": response_text[:500],
+            }
+            captured_requests.append(candidate)
+            score = _score_chat_candidate(candidate)
+            console.print(
+                f"[dim]POST captured[/dim] "
+                f"[cyan]{url}[/cyan] "
+                f"[dim](score={score})[/dim]"
+            )
             log.info(
-                "chat_request_captured",
+                "post_captured",
                 url=url,
                 fields=list(body_json.keys()),
+                score=score,
             )
 
-        page.on("response", handle_response)
-        if capture_profile:
-            page.on("request", observer.on_request)
+        def attach_traffic_handlers(active_page) -> None:
+            active_page.on("response", handle_response)
+            if capture_profile:
+                active_page.on("request", observer.on_request)
 
-        await page.goto(target_url)
+        attach_traffic_handlers(page)
+        context.on("page", attach_traffic_handlers)
+
+        await page.goto(target_url, wait_until="domcontentloaded")
 
         console.print(
-            "[dim]Browser is open. "
-            "Please log in and send a test message...[/dim]"
+            "[dim]Browser is open. Interact with the app — "
+            "AIST is recording traffic live.[/dim]"
         )
 
-        await asyncio.to_thread(
-            input,
-            "\nPress Enter when done...",
+        await _wait_for_login(page, console)
+
+        chat_input, chat_input_selector = await _discover_chat_interface(
+            page,
+            console,
         )
+        if chat_input_selector:
+            log.info(
+                "chat_input_selector",
+                selector=chat_input_selector,
+            )
+
+        if chat_input and not captured_requests:
+            console.print(
+                "[dim]Chat input found but no POST captured yet — "
+                "sending a test message...[/dim]"
+            )
+            await _send_auto_test_message(page, chat_input, console)
+            await page.wait_for_timeout(2000)
+        elif not chat_input and not captured_requests:
+            console.print(
+                "\n[yellow]No chat traffic captured yet.[/yellow]"
+                " If the chat uses WebSockets only, HTTP scanning "
+                "may not work.\n"
+            )
 
         cookies = await context.cookies()
         storage = await context.storage_state()
@@ -592,6 +891,10 @@ AIST will capture your session automatically.
         session.storage_state = storage
 
         if captured_requests:
+            console.print(
+                f"\n[green]Captured {len(captured_requests)} POST request(s). "
+                "Selecting chat endpoint...[/green]"
+            )
             verified = await _select_verified_endpoint(
                 captured_requests,
                 cookies,

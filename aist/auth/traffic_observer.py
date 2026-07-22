@@ -132,8 +132,8 @@ class TrafficObserver:
         response_body: Any = {}
         if "json" in content_type.lower() and text:
             try:
-                response_body = response.json()
-            except Exception:
+                response_body = json.loads(text)
+            except json.JSONDecodeError:
                 response_body = {}
         elif text:
             response_body = {"raw": text[:500]}
