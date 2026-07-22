@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from aist.auth.profile import js_files_count
+
+def _js_files_count(js_files_scanned: Any) -> int:
+    """Normalise JS scan stats that may be int or URL list."""
+    if isinstance(js_files_scanned, list):
+        return len(js_files_scanned)
+    try:
+        return int(js_files_scanned or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def discovery_executive_paragraph(
@@ -29,7 +37,7 @@ def discovery_executive_paragraph(
         return None
 
     endpoints = stats.get("total_endpoints", 0)
-    js_files = js_files_count(stats.get("js_files_scanned", 0))
+    js_files = _js_files_count(stats.get("js_files_scanned", 0))
     return (
         f"Passive browser session analysis identified "
         f"{findings_count} security findings across "
