@@ -754,10 +754,18 @@ def main():
          "Session must not have expired.",
 )
 @click.option(
+    "--session-name",
+    default=None,
+    help="Load session/profile by short name from "
+         "~/.aist/. Exact name or most recent prefix "
+         "(e.g. app-8443 or app-8443-20260722-1055).",
+)
+@click.option(
     "--session-file",
     default=".aist_session.json",
     help="Path to saved session file. "
-         "Default: .aist_session.json",
+         "Default: .aist_session.json (legacy) or "
+         "~/.aist/sessions/ when using --session-name.",
 )
 @click.option(
     "--capture-profile/--no-capture-profile",
@@ -770,12 +778,32 @@ def main():
     is_flag=True,
     default=False,
     help="Load request format from "
-         ".aist_request_profile.json without browser.",
+         "saved profile without browser.",
 )
 @click.option(
     "--profile-file",
     default=".aist_request_profile.json",
     help="Path to saved request profile file.",
+)
+@click.option(
+    "--list-sessions",
+    is_flag=True,
+    default=False,
+    help="List saved sessions in ~/.aist/sessions/ "
+         "and exit.",
+)
+@click.option(
+    "--clear-session",
+    default=None,
+    help="Delete a named session and its profile, "
+         "then exit.",
+)
+@click.option(
+    "--clear-all-sessions",
+    is_flag=True,
+    default=False,
+    help="Delete all saved sessions and profiles, "
+         "then exit.",
 )
 @click.option(
     "--response-type",
@@ -887,8 +915,9 @@ def scan(
     auth_tenant_id, auth_client_id, safe_mode,
     message_field, body_fields, custom_headers,
     response_field, no_followup, app_context,
-    reuse_session, session_file, capture_profile, reuse_profile,
-    profile_file, response_type, scan_delay, test_endpoints,
+    reuse_session, session_name, session_file, capture_profile,
+    reuse_profile, profile_file, list_sessions, clear_session,
+    clear_all_sessions, response_type, scan_delay, test_endpoints,
     bypass_validation, multi_endpoint, skip_endpoint_detection,
     local_judge,
     profile, fail_on, no_adaptive_recon, no_multiturn,
@@ -910,6 +939,32 @@ def scan(
                   --expose-evidence
     """
     setup_logging(log_level=log_level)
+
+    # Session management commands (no scan)
+    if list_sessions:
+        from aist.auth.store import print_sessions_table
+
+        print_sessions_table()
+        return
+    if clear_all_sessions:
+        from aist.auth.store import clear_all_sessions as _clear_all
+
+        count = _clear_all()
+        click.echo(f"Cleared {count} session/profile file(s).")
+        return
+    if clear_session:
+        from aist.auth.store import clear_session as _clear_one
+
+        if _clear_one(clear_session):
+            click.echo(f"Cleared session: {clear_session}")
+        else:
+            click.echo(
+                f"No session matching '{clear_session}'.",
+                err=True,
+            )
+            sys.exit(1)
+        return
+
     print_banner()
 
     auth_cookie_name = None
@@ -920,6 +975,33 @@ def scan(
     wizard_response_field = None
     wizard_goals = None
     wizard_app_context = None
+
+    # Resolve named / legacy session paths when reusing
+    from aist.auth.store import resolve_load_paths
+
+    if session_name or reuse_session or reuse_profile:
+        try:
+            resolved_paths = resolve_load_paths(
+                session_name=session_name,
+                session_file=session_file,
+                profile_file=profile_file,
+            )
+        except FileNotFoundError as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(1)
+
+        session_file = resolved_paths.session_file
+        profile_file = resolved_paths.profile_file
+        if resolved_paths.warning:
+            click.echo(f"[!] {resolved_paths.warning}")
+
+        # --session-name implies reuse of session + profile
+        if session_name or resolved_paths.session_name:
+            reuse_session = True
+            reuse_profile = True
+            session_name = (
+                resolved_paths.session_name or session_name
+            )
 
     # Load target from saved profile when reusing without --target
     if reuse_profile and not target:
@@ -1098,10 +1180,15 @@ def scan(
         config.auth.reuse_session = True
         config.auth.session_file = session_file
         config.auth.auth_type = "browser"
+    if session_name:
+        config.auth.session_name = session_name
+        config.auth.session_file = session_file
+        config.auth.profile_file = profile_file
 
     config.auth.capture_profile = capture_profile
     config.auth.reuse_profile = reuse_profile
     config.auth.profile_file = profile_file
+    config.auth.session_file = session_file
     config.auth.test_endpoints = test_endpoints
     if response_type:
         config.auth.response_type = response_type

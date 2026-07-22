@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from aist.auth.profile import js_files_count
+
 
 def discovery_executive_paragraph(
     discovery: Optional[dict[str, Any]],
@@ -27,7 +29,7 @@ def discovery_executive_paragraph(
         return None
 
     endpoints = stats.get("total_endpoints", 0)
-    js_files = stats.get("js_files_scanned", 0)
+    js_files = js_files_count(stats.get("js_files_scanned", 0))
     return (
         f"Passive browser session analysis identified "
         f"{findings_count} security findings across "

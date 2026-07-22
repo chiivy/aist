@@ -139,16 +139,18 @@ async def check_endpoint_auth(
 
 async def test_discovered_endpoints(
     primary_endpoint: str,
-    discovered_endpoints: list[str],
+    discovered_endpoints: list,
     auth_headers: dict,
     auth_cookies: dict,
     *,
     scan_delay: float = 1.0,
 ) -> list[EndpointFinding]:
     """Test all discovered endpoints for auth enforcement."""
+    from aist.auth.profile import endpoint_paths
+
     all_findings: list[EndpointFinding] = []
     seen: set[str] = set()
-    for path in discovered_endpoints:
+    for path in endpoint_paths(discovered_endpoints):
         normalised = path if path.startswith("/") else f"/{path}"
         if normalised in seen:
             continue

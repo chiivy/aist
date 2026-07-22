@@ -1,9 +1,11 @@
 """
 Session file handling for browser auth.
 
-Auth data lives in .aist_session.json.
-Request format lives in .aist_request_profile.json.
-Legacy single-file sessions remain supported.
+Named sessions live under ~/.aist/sessions/ with
+matching profiles in ~/.aist/profiles/.
+
+Legacy cwd files (.aist_session.json) remain
+supported as a load-time fallback.
 """
 
 from __future__ import annotations

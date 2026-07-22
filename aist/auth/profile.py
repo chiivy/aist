@@ -35,27 +35,65 @@ STANDARD_HTTP_HEADERS = frozenset({
     "authorization",
 })
 
-DANGEROUS_ENDPOINT_PATTERNS: list[tuple[str, str, str]] = [
-    (r"/admin", "High", "Admin endpoint exposed"),
-    (r"/debug", "High", "Debug endpoint exposed"),
-    (r"/config", "Medium", "Config endpoint exposed"),
-    (r"/logs", "Medium", "Log endpoint exposed"),
-    (r"/metrics", "Low", "Metrics endpoint exposed"),
-    (r"/swagger", "Low", "API docs exposed"),
-    (r"/docs", "Low", "API docs exposed"),
-    (r"/health", "Low", "Health endpoint exposed"),
-    (r"/\.well-known", "Low", "Discovery endpoint exposed"),
+DANGEROUS_ENDPOINT_PATTERNS: list[tuple[str, str, str, str]] = [
+    # pattern, severity, label, classification
+    (r"/admin", "High", "Admin endpoint exposed", "admin"),
+    (r"/debug", "High", "Debug endpoint exposed", "debug"),
+    (r"/config", "Medium", "Config endpoint exposed", "config"),
+    (r"/logs", "Medium", "Log endpoint exposed", "logs"),
+    (r"/metrics", "Low", "Metrics endpoint exposed", "metrics"),
+    (r"/swagger", "Low", "API docs exposed", "swagger"),
+    (r"/docs", "Low", "API docs exposed", "docs"),
+    (r"/health", "Low", "Health endpoint exposed", "health"),
+    (r"/\.well-known", "Low", "Discovery endpoint exposed", "well-known"),
 ]
 
-JS_SECRET_PATTERNS: list[tuple[str, str]] = [
-    (r"AKIA[A-Z0-9]{16}", "AWS key"),
-    (r"-----BEGIN [A-Z ]*PRIVATE KEY", "Private key"),
-    (r"eyJ[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+\.", "JWT token"),
-    (r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", "Internal IP"),
-    (r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", "Internal IP"),
-    (r"\b192\.168\.\d{1,3}\.\d{1,3}\b", "Internal IP"),
-    (r"[a-zA-Z0-9_-]+\.(?:internal|local)\b", "Internal hostname"),
-    (r"/api/[a-zA-Z0-9_/-]+", "API endpoint"),
+# pattern, display label, secret_type, severity
+JS_SECRET_PATTERNS: list[tuple[str, str, str, str]] = [
+    (r"AKIA[A-Z0-9]{16}", "AWS key", "aws_key", "high"),
+    (
+        r"-----BEGIN [A-Z ]*PRIVATE KEY",
+        "Private key",
+        "private_key",
+        "high",
+    ),
+    (
+        r"(?i)Bearer\s+eyJ[A-Za-z0-9+/=_-]+\.[A-Za-z0-9+/=_-]+",
+        "Bearer token",
+        "api_key",
+        "high",
+    ),
+    (
+        r"eyJ[A-Za-z0-9+/=_-]+\.[A-Za-z0-9+/=_-]+\.",
+        "JWT token",
+        "jwt",
+        "high",
+    ),
+    (
+        r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+        "Internal IP",
+        "internal_ip",
+        "medium",
+    ),
+    (
+        r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b",
+        "Internal IP",
+        "internal_ip",
+        "medium",
+    ),
+    (
+        r"\b192\.168\.\d{1,3}\.\d{1,3}\b",
+        "Internal IP",
+        "internal_ip",
+        "medium",
+    ),
+    (
+        r"[a-zA-Z0-9_-]+\.(?:internal|local)\b",
+        "Internal hostname",
+        "internal_hostname",
+        "medium",
+    ),
+    (r"/api/[a-zA-Z0-9_/-]+", "API endpoint", "api_endpoint", "low"),
 ]
 
 
@@ -113,32 +151,149 @@ def detect_response_type(
 
 def classify_endpoint(path: str) -> Optional[tuple[str, str]]:
     """Return (severity, label) if path matches dangerous pattern."""
-    for pattern, severity, label in DANGEROUS_ENDPOINT_PATTERNS:
+    detail = classify_endpoint_detail(path)
+    if not detail:
+        return None
+    return detail["severity"], detail.get("label") or detail["reason"]
+
+
+def classify_endpoint_detail(
+    path: str,
+    full_url: str = "",
+) -> Optional[dict[str, Any]]:
+    """
+    Classify a path with severity, keyword, and reason.
+
+    Returns None when the path is not flagged.
+    """
+    for pattern, severity, label, classification in (
+        DANGEROUS_ENDPOINT_PATTERNS
+    ):
         if re.search(pattern, path, re.IGNORECASE):
-            return severity, label
+            return {
+                "path": path,
+                "full_url": full_url or path,
+                "classification": classification,
+                "severity": severity.lower(),
+                "reason": (
+                    f"Path contains '{classification}' keyword"
+                    if classification != "well-known"
+                    else label
+                ),
+                "label": label,
+                "auth_enforced": None,
+            }
     return None
 
 
-def scan_js_content(content: str) -> dict[str, list[str]]:
-    """Scan JavaScript for secrets and endpoints."""
-    findings: dict[str, list[str]] = {
+def secret_preview(value: str) -> str:
+    """Redact a secret to first 6 characters + ****."""
+    text = (value or "").strip()
+    if not text:
+        return "****"
+    # Prefer JWT-looking substring (Bearer eyJ... → eyJhb****)
+    jwt_match = re.search(r"eyJ[A-Za-z0-9+/=_-]+", text)
+    if jwt_match:
+        text = jwt_match.group(0)
+    if len(text) <= 6:
+        return "****"
+    return f"{text[:6]}****"
+
+
+def _line_context(content: str, start: int, end: int, raw: str) -> str:
+    """Return nearby text with the secret value redacted."""
+    left = max(0, start - 40)
+    right = min(len(content), end + 40)
+    snippet = content[left:right]
+    redacted = snippet.replace(raw, secret_preview(raw))
+    return f"...{redacted}..."
+
+
+def scan_js_content(
+    content: str,
+    file_url: str = "",
+) -> dict[str, list]:
+    """
+    Scan JavaScript for secrets and endpoints.
+
+    Secrets are returned as detail dicts with redacted
+    previews only -- never the full secret value.
+    """
+    findings: dict[str, list] = {
         "secrets": [],
         "endpoints": [],
     }
-    for pattern, label in JS_SECRET_PATTERNS:
+    seen_secrets: set[str] = set()
+    seen_endpoints: set[str] = set()
+
+    for pattern, label, secret_type, severity in JS_SECRET_PATTERNS:
         for match in re.finditer(pattern, content):
             value = match.group(0)
-            bucket = "endpoints" if label == "API endpoint" else "secrets"
-            if value not in findings[bucket]:
-                findings[bucket].append(f"{label}: {value[:120]}")
+            if secret_type == "api_endpoint":
+                if value not in seen_endpoints:
+                    seen_endpoints.add(value)
+                    findings["endpoints"].append(value)
+                continue
+            key = f"{secret_type}:{secret_preview(value)}"
+            if key in seen_secrets:
+                continue
+            seen_secrets.add(key)
+            findings["secrets"].append({
+                "file_url": file_url,
+                "secret_type": secret_type,
+                "pattern_matched": label,
+                "preview": secret_preview(value),
+                "line_context": _line_context(
+                    content,
+                    match.start(),
+                    match.end(),
+                    value,
+                ),
+                "severity": severity,
+            })
+
     for todo in re.finditer(
         r"(?i)(TODO|FIXME).{0,80}(password|secret|token|auth|key)",
         content,
     ):
         note = todo.group(0).strip()
-        if note not in findings["secrets"]:
-            findings["secrets"].append(f"Security comment: {note[:120]}")
+        preview = secret_preview(note)
+        key = f"security_comment:{preview}"
+        if key in seen_secrets:
+            continue
+        seen_secrets.add(key)
+        findings["secrets"].append({
+            "file_url": file_url,
+            "secret_type": "security_comment",
+            "pattern_matched": "TODO/FIXME security comment",
+            "preview": preview,
+            "line_context": f"...{note[:120]}...",
+            "severity": "medium",
+        })
     return findings
+
+
+def endpoint_paths(discovered_endpoints: Optional[list]) -> list[str]:
+    """Normalise rich or legacy endpoint lists to path strings."""
+    paths: list[str] = []
+    for item in discovered_endpoints or []:
+        if isinstance(item, dict):
+            path = item.get("path") or item.get("full_url") or ""
+        else:
+            path = str(item)
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def js_files_count(js_files_scanned: Any) -> int:
+    """Count scanned JS files from int or URL list."""
+    if isinstance(js_files_scanned, list):
+        return len(js_files_scanned)
+    try:
+        return int(js_files_scanned or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def path_from_url(url: str) -> str:
@@ -147,11 +302,8 @@ def path_from_url(url: str) -> str:
 
 
 def _mask_secret_preview(value: str) -> str:
-    """Redact sensitive preview text for discovery evidence."""
-    text = (value or "").strip()
-    if len(text) <= 8:
-        return "****"
-    return f"{text[:4]}****{text[-4:]}"
+    """Legacy alias -- prefer secret_preview() for new code."""
+    return secret_preview(value)
 
 
 def make_discovery_finding(
@@ -181,7 +333,7 @@ def build_discovery_block(
     *,
     discovered_endpoints: Optional[list] = None,
     endpoint_labels: Optional[dict] = None,
-    js_files_scanned: int = 0,
+    js_files_scanned: Any = 0,
     js_secrets: Optional[list] = None,
     js_extra_endpoints: Optional[list] = None,
     websocket_detected: bool = False,
@@ -195,36 +347,98 @@ def build_discovery_block(
     """
     findings: list[dict[str, Any]] = []
     endpoints = list(discovered_endpoints or [])
+    paths = endpoint_paths(endpoints)
     labels = endpoint_labels or {}
 
-    for path, meta in labels.items():
-        if isinstance(meta, dict):
-            severity = meta.get("severity", "medium")
-            label = meta.get("label", "Sensitive endpoint exposed")
-        elif isinstance(meta, (list, tuple)) and len(meta) >= 2:
-            severity, label = meta[0], meta[1]
-        else:
-            severity, label = "medium", "Sensitive endpoint exposed"
+    # Prefer rich endpoint records when present
+    rich_added = False
+    for item in endpoints:
+        if not isinstance(item, dict):
+            continue
+        classification = item.get("classification")
+        if classification in (None, "observed", "info"):
+            continue
+        rich_added = True
+        severity = item.get("severity", "medium")
+        label = (
+            item.get("label")
+            or item.get("reason")
+            or "Sensitive endpoint exposed"
+        )
+        path = item.get("path") or item.get("full_url") or ""
         findings.append(
             make_discovery_finding(
                 "endpoint_discovered",
-                label,
+                str(label),
                 str(path),
-                severity,
-                evidence=f"Endpoint observed during browser session: {path}",
+                str(severity),
+                evidence=(
+                    item.get("reason")
+                    or f"Endpoint observed during browser session: {path}"
+                ),
             )
         )
 
+    if not rich_added:
+        for path, meta in labels.items():
+            if isinstance(meta, dict):
+                severity = meta.get("severity", "medium")
+                label = meta.get(
+                    "label",
+                    "Sensitive endpoint exposed",
+                )
+            elif isinstance(meta, (list, tuple)) and len(meta) >= 2:
+                severity, label = meta[0], meta[1]
+            else:
+                severity, label = "medium", "Sensitive endpoint exposed"
+            findings.append(
+                make_discovery_finding(
+                    "endpoint_discovered",
+                    label,
+                    str(path),
+                    severity,
+                    evidence=(
+                        "Endpoint observed during browser "
+                        f"session: {path}"
+                    ),
+                )
+            )
+
     for secret in js_secrets or []:
+        if isinstance(secret, dict):
+            label = secret.get("pattern_matched") or secret.get(
+                "secret_type",
+                "secret",
+            )
+            preview = secret.get("preview") or "****"
+            severity = secret.get("severity", "high")
+            file_url = secret.get("file_url", "")
+            evidence = f"{label}: {preview}"
+            if file_url:
+                evidence = f"{evidence} in {file_url}"
+            findings.append(
+                make_discovery_finding(
+                    "js_secret",
+                    f"Secret found in JavaScript ({label})",
+                    (
+                        f"Possible {str(label).lower()} in "
+                        "downloaded JavaScript"
+                    ),
+                    str(severity),
+                    evidence=evidence,
+                )
+            )
+            continue
+
         preview = str(secret)
-        # "Label: value" from scan_js_content
+        # Legacy "Label: value" from older scan_js_content
         if ": " in preview:
             label, raw = preview.split(": ", 1)
-            evidence = f"{label}: {_mask_secret_preview(raw)}"
+            evidence = f"{label}: {secret_preview(raw)}"
             title = f"Secret found in JavaScript ({label})"
             detail = f"Possible {label.lower()} in downloaded JavaScript"
         else:
-            evidence = _mask_secret_preview(preview)
+            evidence = secret_preview(preview)
             title = "Secret found in JavaScript file"
             detail = "Sensitive pattern matched in JavaScript content"
         findings.append(
@@ -278,8 +492,8 @@ def build_discovery_block(
     return {
         "findings": findings,
         "stats": {
-            "total_endpoints": len(endpoints),
-            "js_files_scanned": int(js_files_scanned or 0),
+            "total_endpoints": len(paths),
+            "js_files_scanned": js_files_count(js_files_scanned),
             "findings_count": len(findings),
         },
     }
@@ -305,7 +519,12 @@ def merge_discovery_findings(
     stats = dict(block.get("stats") or {})
     stats["findings_count"] = len(findings)
     stats.setdefault("total_endpoints", 0)
-    stats.setdefault("js_files_scanned", 0)
+    if "js_files_scanned" in stats:
+        stats["js_files_scanned"] = js_files_count(
+            stats["js_files_scanned"]
+        )
+    else:
+        stats["js_files_scanned"] = 0
     block["findings"] = findings
     block["stats"] = stats
     return block

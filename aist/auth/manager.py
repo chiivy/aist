@@ -16,6 +16,7 @@ Supported methods:
 
 import httpx
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from dataclasses import dataclass, field
 from aist.logger import get_logger
@@ -45,6 +46,7 @@ class AuthConfig:
     browser_session: Optional[Any] = None
     reuse_session: bool = False
     session_file: str = ".aist_session.json"
+    session_name: Optional[str] = None
     capture_profile: bool = True
     reuse_profile: bool = False
     profile_file: str = ".aist_request_profile.json"
@@ -352,8 +354,12 @@ class AuthManager:
             if await self.load_saved_session(
                 self.config.session_file
             ):
+                name = self.config.session_name or Path(
+                    self.config.session_file
+                ).stem
                 console.print(
-                    "[green]✓ Reusing saved session[/green]"
+                    f"[green]✓ Reusing saved session"
+                    f"{f' ({name})' if name else ''}[/green]"
                 )
                 if self._browser_session:
                     log.info(
@@ -388,11 +394,25 @@ class AuthManager:
             )
             return False
 
+        # Prefer named ~/.aist storage unless explicit paths given
+        from aist.auth.store import resolve_save_paths
+
+        save_paths = resolve_save_paths(
+            url,
+            session_file=self.config.session_file,
+            profile_file=self.config.profile_file,
+        )
+        self.config.session_file = save_paths.session_file
+        self.config.profile_file = save_paths.profile_file
+        if save_paths.session_name:
+            self.config.session_name = save_paths.session_name
+
         session = await capture_browser_session(
             url,
             session_file=self.config.session_file,
             profile_file=self.config.profile_file,
             capture_profile=self.config.capture_profile,
+            session_name=self.config.session_name,
         )
 
         if not session:

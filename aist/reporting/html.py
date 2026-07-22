@@ -23,6 +23,7 @@ from jinja2 import Environment, BaseLoader
 from rich.console import Console
 
 from aist.logger import get_logger
+from aist.auth.profile import js_files_count
 from aist.compliance.mappings import (
     get_compliance_mapping,
     format_compliance_for_report,
@@ -1639,7 +1640,9 @@ def _build_browser_discovery(scan_evidence) -> dict:
         "findings": findings,
         "stats": {
             "total_endpoints": stats.get("total_endpoints", 0),
-            "js_files_scanned": stats.get("js_files_scanned", 0),
+            "js_files_scanned": js_files_count(
+                stats.get("js_files_scanned", 0)
+            ),
             "findings_count": stats.get(
                 "findings_count",
                 len(findings),

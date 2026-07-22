@@ -20,6 +20,7 @@ of the scan.
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -732,6 +733,7 @@ async def capture_browser_session(
     session_file: str = DEFAULT_SESSION_FILE,
     profile_file: str = DEFAULT_PROFILE_FILE,
     capture_profile: bool = True,
+    session_name: Optional[str] = None,
 ) -> Optional[BrowserSession]:
     """
     Launch a browser for the user to log in.
@@ -741,6 +743,9 @@ async def capture_browser_session(
         target_url:   The app URL to open
         headless:     False = visible browser (default)
         session_file: Path to save session for reuse
+        profile_file: Path to save request profile
+        capture_profile: Observe traffic for request format
+        session_name: Short name shown after save
 
     Returns:
         BrowserSession with captured auth data
@@ -972,9 +977,20 @@ from your live interactions.
             session_file,
             profile_file,
         )
+        name = session_name
+        if not name:
+            from pathlib import Path
+
+            name = Path(session_file).stem
+        # Short prefix without timestamp for "latest" hint
+        prefix = name
+        match = re.match(r"^(.+)-\d{8}-\d{4}$", name)
+        if match:
+            prefix = match.group(1)
         console.print(
-            "[dim]Session saved. Reuse with "
-            "--reuse-session and --reuse-profile.[/dim]"
+            f"[green]Session saved:[/green] {name}\n"
+            f"  Reuse with: --session-name {name}\n"
+            f"  Or latest:  --session-name {prefix}"
         )
 
     return session if session.chat_endpoint else None
@@ -1034,26 +1050,50 @@ def _print_capture_summary(
         console.print(
             f"[bold]Discovered endpoints:[/bold] {len(endpoints)}"
         )
-        for path in endpoints[:12]:
-            suffix = ""
-            if path in labels:
-                meta = labels[path]
-                suffix = (
-                    f" ({meta.get('severity')}: "
-                    f"{meta.get('label')})"
-                )
-            if session.chat_endpoint.endswith(path):
+        for item in endpoints[:12]:
+            if isinstance(item, dict):
+                path = item.get("path", "")
+                classification = item.get("classification", "")
+                severity = item.get("severity", "")
+                reason = item.get("reason", "")
+                suffix = ""
+                if classification and classification != "observed":
+                    suffix = f" ({severity}: {reason or classification})"
+            else:
+                path = str(item)
+                suffix = ""
+                if path in labels:
+                    meta = labels[path]
+                    suffix = (
+                        f" ({meta.get('severity')}: "
+                        f"{meta.get('label')})"
+                    )
+            if session.chat_endpoint and path and (
+                session.chat_endpoint.endswith(path)
+            ):
                 suffix = " (primary)" + suffix
             console.print(f"  {path}{suffix}")
 
-    if observer.data.js_files_scanned:
+    js_files = observer.data.js_files_scanned
+    js_count = (
+        len(js_files) if isinstance(js_files, list) else int(js_files or 0)
+    )
+    if js_count:
         console.print(
-            f"\n[bold]JS files scanned:[/bold] "
-            f"{observer.data.js_files_scanned}\n"
+            f"\n[bold]JS files scanned:[/bold] {js_count}\n"
             f"  Secrets found: {len(observer.data.js_secrets)}\n"
             f"  Additional endpoints found: "
             f"{len(observer.data.js_endpoints)}"
         )
+        for secret in observer.data.js_secrets[:5]:
+            if isinstance(secret, dict):
+                console.print(
+                    f"  - {secret.get('pattern_matched')}: "
+                    f"{secret.get('preview')} "
+                    f"({secret.get('severity')})"
+                )
+            else:
+                console.print(f"  - {secret}")
 
     console.print(
         f"\n[green]✓ Auth headers:[/green] "

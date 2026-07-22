@@ -106,19 +106,24 @@ async def _run_endpoint_auth_tests(
     scan_evidence: ScanEvidence,
 ) -> None:
     """Test discovered endpoints for auth enforcement."""
-    from aist.auth.profile import load_request_profile
+    from aist.auth.profile import (
+        endpoint_paths,
+        load_request_profile,
+        save_request_profile,
+    )
     from aist.scanner.endpoint_tester import test_discovered_endpoints
     from aist.scanner.infrastructure import InfraFinding
 
     profile = load_request_profile(config.auth.profile_file) or {}
-    endpoints = profile.get("discovered_endpoints") or []
-    if not endpoints:
+    raw_endpoints = profile.get("discovered_endpoints") or []
+    if not raw_endpoints:
         browser_session = auth_manager.get_browser_session()
         if browser_session and browser_session.request_profile:
-            endpoints = browser_session.request_profile.get(
+            raw_endpoints = browser_session.request_profile.get(
                 "discovered_endpoints", []
             )
 
+    endpoints = endpoint_paths(raw_endpoints)
     if not endpoints:
         log.info("endpoint_tests_skipped", reason="no_endpoints")
         return
@@ -135,6 +140,38 @@ async def _run_endpoint_auth_tests(
         auth_manager.get_cookies(),
         scan_delay=config.scan.scan_delay,
     )
+
+    # Mark auth_enforced on rich endpoint records when possible
+    tested_paths = set(endpoints)
+    unauth_checks = {"no_auth_required", "invalid_auth_accepted"}
+    issue_paths = {
+        (
+            item.endpoint
+            if item.endpoint.startswith("/")
+            else f"/{item.endpoint}"
+        )
+        for item in findings
+        if item.check in unauth_checks
+    }
+    updated_endpoints: list = []
+    for item in raw_endpoints:
+        if isinstance(item, dict):
+            record = dict(item)
+            path = record.get("path") or ""
+            if path in tested_paths:
+                record["auth_enforced"] = path not in issue_paths
+            updated_endpoints.append(record)
+        else:
+            updated_endpoints.append(item)
+    if updated_endpoints and profile:
+        profile["discovered_endpoints"] = updated_endpoints
+        try:
+            save_request_profile(profile, config.auth.profile_file)
+        except Exception as exc:
+            log.info(
+                "profile_auth_enforced_update_failed",
+                error=str(exc),
+            )
 
     infra_findings = list(
         getattr(scan_evidence, "infrastructure_findings", [])
@@ -185,11 +222,13 @@ def _collect_endpoints_for_classification(
     auth_manager: AuthManager,
 ) -> list[str]:
     """Gather discovered paths and primary URL for classification."""
-    from aist.auth.profile import load_request_profile
+    from aist.auth.profile import endpoint_paths, load_request_profile
 
     endpoints: list[str] = []
     profile = load_request_profile(config.auth.profile_file) or {}
-    endpoints.extend(profile.get("discovered_endpoints") or [])
+    endpoints.extend(
+        endpoint_paths(profile.get("discovered_endpoints") or [])
+    )
 
     if profile.get("primary_endpoint"):
         endpoints.append(profile["primary_endpoint"])
@@ -200,9 +239,11 @@ def _collect_endpoints_for_classification(
             endpoints.append(browser_session.chat_endpoint)
         if browser_session.request_profile:
             endpoints.extend(
-                browser_session.request_profile.get(
-                    "discovered_endpoints",
-                    [],
+                endpoint_paths(
+                    browser_session.request_profile.get(
+                        "discovered_endpoints",
+                        [],
+                    )
                 )
             )
 
@@ -599,6 +640,7 @@ async def run_full_scan(
     # Load passive browser discovery findings into the report
     from aist.auth.profile import (
         build_discovery_block,
+        js_files_count,
         load_request_profile,
     )
 
@@ -615,20 +657,29 @@ async def run_full_scan(
     elif (
         profile.get("discovered_endpoints")
         or profile.get("endpoint_labels")
+        or profile.get("js_secrets")
         or profile.get("js_secrets_found")
     ):
         # Rebuild from older profiles that lack discovery block
+        secrets = profile.get("js_secrets") or []
         scan_evidence.discovery = build_discovery_block(
             discovered_endpoints=profile.get(
                 "discovered_endpoints", []
             ),
             endpoint_labels=profile.get("endpoint_labels", {}),
             js_files_scanned=profile.get("js_files_scanned", 0),
-            js_secrets=[],
+            js_secrets=secrets,
             js_extra_endpoints=profile.get(
                 "js_extra_endpoints", []
             ),
         )
+        # Normalise stats for list-or-int js_files_scanned
+        if scan_evidence.discovery.get("stats"):
+            scan_evidence.discovery["stats"]["js_files_scanned"] = (
+                js_files_count(
+                    profile.get("js_files_scanned", 0)
+                )
+            )
 
     if (
         config.auth.test_endpoints
